@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ETIM10 Materiallisten-Upload</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet"/>
+  <style>
+    body { background-color: #f4f6f9; }
+    .navbar-brand { font-weight: 700; letter-spacing: .5px; }
+    .section-card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+    .section-card .card-header {
+      font-weight: 600;
+      background: #fff;
+      border-bottom: 2px solid #1ca1a9;
+      color: #1ca1a9;
+      font-size: .95rem;
+      letter-spacing: .3px;
+    }
+    .field-hint { font-size: .8rem; color: #6c757d; margin-top: .2rem; }
+    .kunnr-padded { font-weight: 600; color: #1ca1a9; }
+    .preview-table th { white-space: nowrap; }
+    .preview-table td { white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+    .lang-btn-group .btn-check:checked + .btn { font-weight: 600; }
+    #resultSection pre { font-size: .78rem; }
+    #jsonPreviewSection pre { font-size: .76rem; line-height: 1.45; }
+    .json-toolbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    .spinner-overlay { display: none; }
+    /* Brand colour overrides */
+    .bg-primary, .btn-primary { background-color: #1ca1a9 !important; border-color: #1ca1a9 !important; }
+    .btn-outline-primary { color: #1ca1a9 !important; border-color: #1ca1a9 !important; }
+    .btn-outline-primary:hover, .btn-outline-primary:active, .btn-outline-primary.active {
+      background-color: #1ca1a9 !important; color: #fff !important;
+    }
+    .text-primary { color: #1ca1a9 !important; }
+    .step-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      background: #1ca1a9;
+      color: #fff;
+      font-size: .8rem;
+      font-weight: 700;
+      margin-right: .5rem;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar navbar-dark bg-primary shadow-sm">
+  <div class="container-xl">
+    <span class="navbar-brand">
+      <i class="bi bi-upload me-2"></i>ETIM10 Materiallisten-Upload
+    </span>
+    <span class="text-white-50 small">EGLO EDI Interface</span>
+  </div>
+</nav>
+
+<div class="container-xl py-4">
+  <form id="mainForm" novalidate autocomplete="off">
+
+    <!-- ================================================================
+         SECTION 1 – Header-Daten
+    ================================================================ -->
+    <div class="card section-card mb-4">
+      <div class="card-header d-flex align-items-center">
+        <span class="step-badge">1</span>Header-Daten
+      </div>
+      <div class="card-body">
+
+        <!-- Sprachen -->
+        <div class="mb-4">
+          <label class="form-label fw-semibold">
+            Sprachen <span class="text-danger">*</span>
+          </label>
+          <div class="lang-btn-group d-flex flex-wrap gap-2" role="group" aria-label="Sprachen">
+            <input type="checkbox" class="btn-check" name="languages" value="ger" id="lang_ger" autocomplete="off"/>
+            <label class="btn btn-outline-secondary" for="lang_ger">
+              <i class="bi bi-translate me-1"></i>Deutsch
+            </label>
+            <input type="checkbox" class="btn-check" name="languages" value="eng" id="lang_eng" autocomplete="off"/>
+            <label class="btn btn-outline-secondary" for="lang_eng">
+              <i class="bi bi-translate me-1"></i>Englisch
+            </label>
+            <input type="checkbox" class="btn-check" name="languages" value="slo" id="lang_slo" autocomplete="off"/>
+            <label class="btn btn-outline-secondary" for="lang_slo">
+              <i class="bi bi-translate me-1"></i>Slowakisch
+            </label>
+          </div>
+          <div id="langFeedback" class="invalid-feedback d-none" style="display:block!important">
+            Mindestens eine Sprache muss ausgewählt sein.
+          </div>
+        </div>
+
+        <!-- KUNNR + VKORG -->
+        <div class="row g-3 mb-3">
+          <div class="col-sm-6 col-lg-4">
+            <label for="kunnr" class="form-label fw-semibold">
+              Kundennr. (KUNNR) <span class="text-danger">*</span>
+            </label>
+            <input type="text" class="form-control" id="kunnr" name="kunnr"
+                   placeholder="z. B. 311804" maxlength="10" inputmode="numeric"/>
+            <div class="invalid-feedback" id="kunnrError">KUNNR-Fehler</div>
+            <div class="field-hint" id="kunnrHint"></div>
+          </div>
+          <div class="col-sm-6 col-lg-2">
+            <label for="vkorg" class="form-label fw-semibold">
+              VKORG <span class="text-danger">*</span>
+            </label>
+            <input type="text" class="form-control" id="vkorg" name="vkorg"
+                   placeholder="0030" maxlength="4"/>
+            <div class="invalid-feedback">Genau 4 Zeichen erforderlich.</div>
+          </div>
+          <div class="col-sm-6 col-lg-2">
+            <label for="vtweg" class="form-label fw-semibold">
+              Vertriebsweg (VTWEG) <span class="text-danger">*</span>
+            </label>
+            <input type="text" class="form-control" id="vtweg" name="vtweg"
+                   placeholder="01" maxlength="2"/>
+            <div class="invalid-feedback">Genau 2 Zeichen erforderlich.</div>
+          </div>
+          <div class="col-sm-6 col-lg-2">
+            <label for="spart" class="form-label fw-semibold">
+              Sparte (SPART) <span class="text-danger">*</span>
+            </label>
+            <input type="text" class="form-control" id="spart" name="spart"
+                   placeholder="00" maxlength="2"/>
+            <div class="invalid-feedback">Genau 2 Zeichen erforderlich.</div>
+          </div>
+          <div class="col-sm-6 col-lg-2">
+            <label for="werks" class="form-label fw-semibold">
+              Werks <span class="text-danger">*</span>
+            </label>
+            <select class="form-select" id="werks" name="werks">
+              <option value="" disabled selected>— wählen —</option>
+              <option value="0090">0090</option>
+              <option value="0030">0030</option>
+            </select>
+            <div class="invalid-feedback">Bitte Werks auswählen.</div>
+          </div>
+        </div>
+
+        <!-- E-Mail -->
+        <div class="row g-3">
+          <div class="col-sm-8 col-lg-6">
+            <label for="email" class="form-label fw-semibold">
+              E-Mail <span class="text-danger">*</span>
+            </label>
+            <input type="email" class="form-control" id="email" name="email"
+                   placeholder="empfaenger@beispiel.de"/>
+            <div class="invalid-feedback" id="emailError">Bitte eine gültige E-Mail-Adresse eingeben.</div>
+            <div class="field-hint">An diese Adresse wird das Ergebnis gesendet.</div>
+          </div>
+        </div>
+
+      </div><!-- /card-body -->
+    </div><!-- /card -->
+
+
+    <!-- ================================================================
+         SECTION 2 – Datei-Upload
+    ================================================================ -->
+    <div class="card section-card mb-4">
+      <div class="card-header d-flex align-items-center">
+        <span class="step-badge">2</span>Datei-Upload
+      </div>
+      <div class="card-body">
+        <div class="row g-3 align-items-start">
+          <div class="col-md-8">
+            <label for="file" class="form-label fw-semibold">
+              Datei <span class="text-danger">*</span>
+            </label>
+            <input class="form-control" type="file" id="file" name="file"
+                   accept=".xlsx,.xls,.csv"/>
+            <div id="fileInfo" class="field-hint mt-1"></div>
+          </div>
+          <div class="col-md-4">
+            <div class="alert alert-light border mb-0 small mt-md-4">
+              <strong>Erlaubte Formate:</strong><br/>
+              Excel: <code>.xlsx</code>, <code>.xls</code><br/>
+              CSV: <code>.csv</code> (Trenner: <code>;</code>)<br/>
+              <hr class="my-1"/>
+              <strong>Spalten A–G:</strong><br/>
+              A Materialnummer&nbsp;· B Preis<br/>
+              C Preis_ab&nbsp;· D MWST_in_%<br/>
+              E Preis_2&nbsp;· F Währung&nbsp;· G Territory
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ================================================================
+         SECTION 3 – Aktionen
+    ================================================================ -->
+    <div class="d-flex flex-wrap gap-2 mb-4">
+      <button type="button" id="validateBtn" class="btn btn-outline-primary px-4" disabled>
+        <i class="bi bi-search me-1"></i>Validieren &amp; Vorschau
+      </button>
+      <button type="button" id="jsonPreviewBtn" class="btn btn-outline-secondary px-4 d-none">
+        <i class="bi bi-code-slash me-1"></i>JSON ansehen
+      </button>
+      <button type="button" id="submitBtn" class="btn btn-success px-4 d-none" disabled>
+        <i class="bi bi-send-fill me-1"></i>Senden
+      </button>
+      <button type="button" id="resetBtn" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Zurücksetzen
+      </button>
+    </div>
+
+  </form><!-- /mainForm -->
+
+
+  <!-- ================================================================
+       SECTION 4 – Validierungsergebnis (hidden until validate)
+  ================================================================ -->
+  <div id="validationSection" class="card section-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center">
+      <span class="step-badge">3</span>Validierungsergebnis
+    </div>
+    <div class="card-body">
+      <div id="validationSummary"></div>
+      <div id="errorsContainer"></div>
+      <div id="warningsContainer"></div>
+      <div id="previewContainer"></div>
+
+      <!-- Submit button inside result panel for UX flow -->
+      <div id="submitArea" class="mt-3 d-none">
+        <button type="button" id="submitBtn2" class="btn btn-success btn-lg px-5">
+          <i class="bi bi-send-fill me-2"></i>Jetzt senden
+        </button>
+        <span class="text-muted ms-3 small">Daten werden an den EGLO EDI-Server übertragen.</span>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ================================================================
+       SECTION 4b – JSON Vorschau (hidden until json-preview)
+  ================================================================ -->
+  <div id="jsonPreviewSection" class="card section-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <div class="d-flex align-items-center">
+        <span class="step-badge" style="background:#6c757d">J</span>
+        Generiertes JSON-Payload
+      </div>
+      <div class="json-toolbar">
+        <span id="jsonRowCount" class="badge bg-secondary"></span>
+        <button type="button" id="copyJsonBtn" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-clipboard me-1"></i>Kopieren
+        </button>
+        <button type="button" id="downloadJsonBtn" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-download me-1"></i>Download
+        </button>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <pre id="jsonPayloadPre" class="m-0 p-3 bg-dark text-light rounded-bottom"
+           style="max-height:500px;overflow-y:auto;overflow-x:auto"></pre>
+    </div>
+  </div>
+
+  <!-- ================================================================
+       SECTION 5 – Sendeergebnis (hidden until submit)
+  ================================================================ -->
+  <div id="resultSection" class="card section-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center">
+      <span class="step-badge" id="resultStepBadge">4</span>Sendeergebnis
+    </div>
+    <div class="card-body">
+      <div id="resultContent"></div>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+/* =========================================================
+   State
+   ========================================================= */
+let validationPassed = false;
+
+const mainForm         = document.getElementById('mainForm');
+const validateBtn      = document.getElementById('validateBtn');
+const jsonPreviewBtn   = document.getElementById('jsonPreviewBtn');
+const submitBtn        = document.getElementById('submitBtn');   // top bar
+const submitBtn2       = document.getElementById('submitBtn2');  // inside result panel
+const resetBtn         = document.getElementById('resetBtn');
+const validSection     = document.getElementById('validationSection');
+const jsonPreviewSection = document.getElementById('jsonPreviewSection');
+const resultSection    = document.getElementById('resultSection');
+const submitArea       = document.getElementById('submitArea');
+
+/* =========================================================
+   Field validators (client-side, real-time)
+   ========================================================= */
+function validateKUNNR() {
+  const el   = document.getElementById('kunnr');
+  const errEl= document.getElementById('kunnrError');
+  const hint = document.getElementById('kunnrHint');
+  const v    = el.value.trim();
+  if (!v) {
+    setInvalid(el, errEl, 'KUNNR ist ein Pflichtfeld.');
+    hint.innerHTML = '';
+    return false;
+  }
+  if (!/^\d+$/.test(v)) {
+    setInvalid(el, errEl, 'Nur Ziffern erlaubt.');
+    hint.innerHTML = '';
+    return false;
+  }
+  if (v.length > 10) {
+    setInvalid(el, errEl, `Maximal 10 Ziffern (aktuell: ${v.length}).`);
+    hint.innerHTML = '';
+    return false;
+  }
+  setValid(el);
+  hint.innerHTML = `<span class="kunnr-padded"><i class="bi bi-arrow-right-short"></i>Gesendet als: ${v.padStart(10,'0')}</span>`;
+  return true;
+}
+
+function validateFixed(id, len, label) {
+  const el = document.getElementById(id);
+  const v  = el.value.trim();
+  if (v.length !== len) {
+    el.classList.add('is-invalid');
+    el.classList.remove('is-valid');
+    // The .invalid-feedback is already set in HTML
+    return false;
+  }
+  setValid(el);
+  return true;
+}
+
+function validateWerks() {
+  const el = document.getElementById('werks');
+  if (!el.value) {
+    el.classList.add('is-invalid');
+    el.classList.remove('is-valid');
+    return false;
+  }
+  setValid(el);
+  return true;
+}
+
+function validateEmail() {
+  const el    = document.getElementById('email');
+  const errEl = document.getElementById('emailError');
+  const v     = el.value.trim();
+  if (!v) {
+    setInvalid(el, errEl, 'E-Mail ist ein Pflichtfeld.');
+    return false;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+    setInvalid(el, errEl, 'Bitte eine gültige E-Mail-Adresse eingeben.');
+    return false;
+  }
+  setValid(el);
+  return true;
+}
+
+function validateLanguages() {
+  const checked  = document.querySelectorAll('input[name="languages"]:checked');
+  const feedback = document.getElementById('langFeedback');
+  if (checked.length === 0) {
+    feedback.classList.remove('d-none');
+    return false;
+  }
+  feedback.classList.add('d-none');
+  return true;
+}
+
+function validateFile() {
+  const el = document.getElementById('file');
+  return el.files.length > 0;
+}
+
+function setValid(el) {
+  el.classList.remove('is-invalid');
+  el.classList.add('is-valid');
+}
+function setInvalid(el, errEl, msg) {
+  el.classList.add('is-invalid');
+  el.classList.remove('is-valid');
+  if (errEl) errEl.textContent = msg;
+}
+
+function runFormValidation() {
+  const ok = [
+    validateLanguages(),
+    validateKUNNR(),
+    validateFixed('vkorg', 4, 'VKORG'),
+    validateFixed('vtweg', 2, 'VTWEG'),
+    validateFixed('spart', 2, 'SPART'),
+    validateWerks(),
+    validateEmail(),
+    validateFile(),
+  ].every(Boolean);
+  validateBtn.disabled = !ok;
+  return ok;
+}
+
+/* =========================================================
+   Invalidate after any change
+   ========================================================= */
+function invalidateValidation() {
+  if (!validationPassed) return;
+  validationPassed = false;
+  submitBtn.disabled = true;
+  submitBtn.classList.add('d-none');
+  jsonPreviewBtn.classList.add('d-none');
+  submitArea.classList.add('d-none');
+  validSection.classList.add('d-none');
+  jsonPreviewSection.classList.add('d-none');
+  resultSection.classList.add('d-none');
+}
+
+mainForm.addEventListener('change',   () => { invalidateValidation(); runFormValidation(); });
+mainForm.addEventListener('input',    () => { invalidateValidation(); runFormValidation(); });
+
+/* =========================================================
+   File info display
+   ========================================================= */
+document.getElementById('file').addEventListener('change', function () {
+  const infoEl = document.getElementById('fileInfo');
+  if (this.files.length > 0) {
+    const f = this.files[0];
+    const mb = (f.size / 1024 / 1024).toFixed(2);
+    infoEl.innerHTML = `<i class="bi bi-file-earmark-check text-success"></i> <strong>${escHtml(f.name)}</strong> (${mb}&nbsp;MB)`;
+  } else {
+    infoEl.innerHTML = '';
+  }
+});
+
+/* =========================================================
+   VALIDATE
+   ========================================================= */
+validateBtn.addEventListener('click', async () => {
+  if (!runFormValidation()) return;
+
+  setButtonLoading(validateBtn, 'Validiere…');
+
+  try {
+    const fd = new FormData(mainForm);
+    const resp = await fetch('/validate', { method: 'POST', body: fd });
+    const data = await parseResponse(resp);
+    showValidationResults(data);
+  } catch (e) {
+    showValidationResults({
+      success: false,
+      errors: [{ field: 'Netzwerk', message: e.message, row: null }],
+      warnings: [], row_count: 0, preview: [], kunnr_padded: ''
+    });
+  } finally {
+    resetButton(validateBtn, '<i class="bi bi-search me-1"></i>Validieren &amp; Vorschau');
+  }
+});
+
+/* =========================================================
+   JSON PREVIEW
+   ========================================================= */
+jsonPreviewBtn.addEventListener('click', async () => {
+  if (!runFormValidation()) return;
+
+  setButtonLoading(jsonPreviewBtn, 'Generiere…');
+
+  try {
+    const fd = new FormData(mainForm);
+    const resp = await fetch('/json-preview', { method: 'POST', body: fd });
+    const data = await parseResponse(resp);
+
+    if (!data.success) {
+      // Show errors in validation section (already visible)
+      showValidationResults(data);
+      return;
+    }
+
+    // Display JSON
+    const section = jsonPreviewSection;
+    section.classList.remove('d-none');
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    document.getElementById('jsonRowCount').textContent =
+      `${data.row_count} Datensätze`;
+    document.getElementById('jsonPayloadPre').textContent = data.payload;
+
+    // Store for download
+    jsonPreviewBtn._lastPayload = data.payload;
+
+  } catch (e) {
+    alert('Fehler beim Generieren des JSON: ' + e.message);
+  } finally {
+    resetButton(jsonPreviewBtn, '<i class="bi bi-code-slash me-1"></i>JSON ansehen');
+  }
+});
+
+/* Copy to clipboard */
+document.getElementById('copyJsonBtn').addEventListener('click', () => {
+  const text = document.getElementById('jsonPayloadPre').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyJsonBtn');
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Kopiert!';
+    btn.classList.replace('btn-outline-secondary', 'btn-success');
+    setTimeout(() => {
+      btn.innerHTML = orig;
+      btn.classList.replace('btn-success', 'btn-outline-secondary');
+    }, 2000);
+  });
+});
+
+/* Download as .json */
+document.getElementById('downloadJsonBtn').addEventListener('click', () => {
+  const text = document.getElementById('jsonPayloadPre').textContent;
+  const blob = new Blob([text], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `materialliste_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+/* =========================================================
+   SUBMIT  (both buttons trigger the same handler)
+   ========================================================= */
+async function doSubmit() {
+  if (!runFormValidation()) return;
+
+  [submitBtn, submitBtn2].forEach(b => setButtonLoading(b, 'Sende…'));
+
+  try {
+    const fd = new FormData(mainForm);
+    const resp = await fetch('/submit', { method: 'POST', body: fd });
+    const data = await parseResponse(resp);
+    showResult(data);
+  } catch (e) {
+    showResult({
+      success: false,
+      errors: [{ field: 'Netzwerk', message: e.message, row: null }],
+      warnings: [], row_count: 0
+    });
+  } finally {
+    resetButton(submitBtn,  '<i class="bi bi-send-fill me-1"></i>Senden');
+    resetButton(submitBtn2, '<i class="bi bi-send-fill me-2"></i>Jetzt senden');
+    [submitBtn, submitBtn2].forEach(b => b.disabled = false);
+  }
+}
+
+submitBtn.addEventListener('click',  doSubmit);
+submitBtn2.addEventListener('click', doSubmit);
+
+/* =========================================================
+   RESET
+   ========================================================= */
+resetBtn.addEventListener('click', () => {
+  mainForm.reset();
+  validationPassed = false;
+
+  // Clear validation states
+  mainForm.querySelectorAll('.is-valid,.is-invalid').forEach(el => {
+    el.classList.remove('is-valid','is-invalid');
+  });
+
+  document.getElementById('langFeedback').classList.add('d-none');
+  document.getElementById('kunnrHint').innerHTML = '';
+  document.getElementById('fileInfo').innerHTML  = '';
+
+  validSection.classList.add('d-none');
+  jsonPreviewSection.classList.add('d-none');
+  resultSection.classList.add('d-none');
+  submitArea.classList.add('d-none');
+  submitBtn.classList.add('d-none');
+  jsonPreviewBtn.classList.add('d-none');
+  validateBtn.disabled = true;
+});
+
+/* =========================================================
+   SHOW VALIDATION RESULTS
+   ========================================================= */
+function showValidationResults(data) {
+  validSection.classList.remove('d-none');
+  validSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const summaryEl   = document.getElementById('validationSummary');
+  const errorsEl    = document.getElementById('errorsContainer');
+  const warningsEl  = document.getElementById('warningsContainer');
+  const previewEl   = document.getElementById('previewContainer');
+
+  // ---- Summary ----
+  if (data.success) {
+    summaryEl.innerHTML = `
+      <div class="alert alert-success d-flex align-items-center gap-2 mb-3">
+        <i class="bi bi-check-circle-fill fs-5"></i>
+        <div>
+          <strong>${data.row_count} Datensätze geladen – keine Fehler.</strong>
+          ${data.warnings && data.warnings.length > 0
+            ? ` <span class="text-warning-emphasis">${data.warnings.length} Warnung(en) vorhanden.</span>`
+            : ''}
+          ${data.kunnr_padded
+            ? `<br/><small>KUNNR wird gesendet als: <strong>${escHtml(data.kunnr_padded)}</strong></small>`
+            : ''}
+        </div>
+      </div>`;
+    validationPassed = true;
+    submitArea.classList.remove('d-none');
+    submitBtn2.disabled = false;
+    jsonPreviewBtn.classList.remove('d-none');
+  } else {
+    summaryEl.innerHTML = `
+      <div class="alert alert-danger d-flex align-items-center gap-2 mb-3">
+        <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+        <div>
+          <strong>${(data.errors||[]).length} Fehler gefunden – Senden nicht möglich.</strong>
+          ${data.row_count > 0 ? ` (${data.row_count} Zeilen verarbeitet)` : ''}
+        </div>
+      </div>`;
+    validationPassed = false;
+    submitArea.classList.add('d-none');
+  }
+
+  // ---- Errors ----
+  if (data.errors && data.errors.length > 0) {
+    errorsEl.innerHTML = `
+      <div class="mb-3">
+        <h6 class="text-danger"><i class="bi bi-x-circle-fill me-1"></i>Fehler (${data.errors.length})</h6>
+        <ul class="list-group list-group-flush border rounded">
+          ${data.errors.map(e => `
+            <li class="list-group-item list-group-item-danger py-1 small">
+              ${e.row ? `<strong>Zeile&nbsp;${e.row}:</strong>&nbsp;` : ''}
+              <strong>${escHtml(e.field)}:</strong>&nbsp;${escHtml(e.message)}
+            </li>`).join('')}
+        </ul>
+      </div>`;
+  } else {
+    errorsEl.innerHTML = '';
+  }
+
+  // ---- Warnings ----
+  if (data.warnings && data.warnings.length > 0) {
+    warningsEl.innerHTML = `
+      <div class="mb-3">
+        <h6 class="text-warning-emphasis"><i class="bi bi-exclamation-triangle-fill me-1"></i>Warnungen (${data.warnings.length})</h6>
+        <ul class="list-group list-group-flush border rounded">
+          ${data.warnings.map(w => `
+            <li class="list-group-item list-group-item-warning py-1 small">
+              ${w.row ? `<strong>Zeile&nbsp;${w.row}:</strong>&nbsp;` : ''}
+              <strong>${escHtml(w.field)}:</strong>&nbsp;${escHtml(w.message)}
+            </li>`).join('')}
+        </ul>
+      </div>`;
+  } else {
+    warningsEl.innerHTML = '';
+  }
+
+  // ---- Preview ----
+  if (data.preview && data.preview.length > 0) {
+    const headers = ['Materialnummer','Preis','Preis_ab','MWST_in_%','Preis_2','Währung','Territory'];
+    const keys    = ['Materialnummer','Preis','Preis_ab','MWST_in_','Preis_2','EUR','Territory'];
+    previewEl.innerHTML = `
+      <h6 class="mt-2"><i class="bi bi-table me-1"></i>Vorschau – erste ${data.preview.length} von ${data.row_count} Datensätzen (Originalwerte)</h6>
+      <div class="table-responsive">
+        <table class="table table-sm table-striped table-hover preview-table">
+          <thead class="table-dark">
+            <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
+          </thead>
+          <tbody>
+            ${data.preview.map(row => `
+              <tr>${keys.map(k =>
+                `<td title="${escHtml(row[k]||'')}">${row[k] ? escHtml(row[k]) : '<em class="text-muted">—</em>'}</td>`
+              ).join('')}</tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } else {
+    previewEl.innerHTML = '';
+  }
+}
+
+/* =========================================================
+   SHOW SEND RESULT
+   ========================================================= */
+function showResult(data) {
+  resultSection.classList.remove('d-none');
+  resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const content = document.getElementById('resultContent');
+
+  if (data.http_success) {
+    content.innerHTML = `
+      <div class="alert alert-success d-flex align-items-center gap-2">
+        <i class="bi bi-check-circle-fill fs-4"></i>
+        <div>
+          <strong>Erfolgreich übertragen!</strong><br/>
+          HTTP-Status: <strong>${data.http_status}</strong> &nbsp;|&nbsp;
+          ${data.row_count} Datensätze gesendet.
+          ${data.warnings && data.warnings.length > 0
+            ? `<br/><span class="text-warning-emphasis small">${data.warnings.length} Warnung(en) wurden akzeptiert.</span>`
+            : ''}
+        </div>
+      </div>
+      ${responseBodyHtml(data.response_body)}
+      ${payloadPreviewHtml(data.payload_preview)}`;
+  } else {
+    const errors = data.errors || [];
+    content.innerHTML = `
+      <div class="alert alert-danger d-flex align-items-center gap-2">
+        <i class="bi bi-exclamation-triangle-fill fs-4"></i>
+        <div>
+          <strong>Fehler beim Senden.</strong>
+          ${data.http_status ? `<br/>HTTP-Status: <strong>${data.http_status}</strong>` : ''}
+          ${errors.map(e => `<br/><span class="small">${escHtml(e.field)}: ${escHtml(e.message)}</span>`).join('')}
+        </div>
+      </div>
+      ${responseBodyHtml(data.response_body)}
+      ${payloadPreviewHtml(data.payload_preview)}`;
+  }
+}
+
+function responseBodyHtml(body) {
+  if (!body) return '';
+  return `
+    <div class="mt-3">
+      <strong class="small">Server-Antwort:</strong>
+      <pre class="border rounded p-2 bg-light mt-1" style="max-height:180px;overflow-y:auto">${escHtml(body)}</pre>
+    </div>`;
+}
+
+function payloadPreviewHtml(preview) {
+  if (!preview) return '';
+  return `
+    <div class="mt-2">
+      <details>
+        <summary class="small text-muted" style="cursor:pointer">
+          <i class="bi bi-code-slash me-1"></i>Gesendetes JSON (Vorschau, erste 5 Einträge)
+        </summary>
+        <pre class="border rounded p-2 bg-light mt-1" style="max-height:300px;overflow-y:auto;font-size:.75rem">${escHtml(preview)}</pre>
+      </details>
+    </div>`;
+}
+
+/* =========================================================
+   Utilities
+   ========================================================= */
+function escHtml(text) {
+  return String(text||'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function setButtonLoading(btn, label) {
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>${label}`;
+}
+
+function resetButton(btn, html) {
+  btn.innerHTML = html;
+}
+
+async function parseResponse(resp) {
+  const ct = resp.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    return await resp.json();
+  }
+  const text = await resp.text();
+  return {
+    success: false,
+    errors: [{ field: 'Server', message: `HTTP ${resp.status}: ${text.slice(0,200)}`, row: null }],
+    warnings: [], row_count: 0, preview: [], kunnr_padded: ''
+  };
+}
+</script>
+</body>
+</html>

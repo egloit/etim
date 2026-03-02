@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    image: etim10-formular:latest
+    container_name: etim10-formular
+    ports:
+      - "8000:8000"       # Host port 8080 → Container port 8000
+    env_file:
+      - .env              # copy .env.example to .env and fill in values
+    restart: unless-stopped
+    # Optional: resource limits
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 256M
