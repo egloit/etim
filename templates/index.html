@@ -53,16 +53,53 @@
 
 <!-- Navbar -->
 <nav class="navbar navbar-dark bg-primary shadow-sm">
-  <div class="container-xl">
+  <div class="container-xl d-flex align-items-center justify-content-between">
     <span class="navbar-brand">
       <i class="bi bi-upload me-2"></i>ETIM10 Materiallisten-Upload
     </span>
-    <span class="text-white-50 small">EGLO EDI Interface</span>
+    <div class="d-flex align-items-center gap-3">
+      <span class="text-white-50 small">EGLO EDI Interface</span>
+      {% if user %}
+      <span class="text-white small d-none d-sm-inline">
+        <i class="bi bi-person-circle me-1"></i>{{ user.name }}
+      </span>
+      <a href="/auth/logout" class="btn btn-sm btn-outline-light">
+        <i class="bi bi-box-arrow-right me-1"></i>Abmelden
+      </a>
+      {% endif %}
+    </div>
   </div>
 </nav>
 
 <div class="container-xl py-4">
   <form id="mainForm" novalidate autocomplete="off">
+
+    <!-- ================================================================
+         SECTION 0 – Export-Typ (nur sichtbar wenn User in beiden Gruppen)
+    ================================================================ -->
+    {% if 'etim' in roles and 'gs1' in roles %}
+    <div class="card section-card mb-4">
+      <div class="card-header d-flex align-items-center">
+        <span class="step-badge">0</span>Export-Typ
+      </div>
+      <div class="card-body">
+        <div class="d-flex gap-4">
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="mode" id="modeEtim" value="etim" checked/>
+            <label class="form-check-label fw-semibold" for="modeEtim">ETIM</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="mode" id="modeGs1" value="gs1"/>
+            <label class="form-check-label fw-semibold" for="modeGs1">GS1</label>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% elif 'gs1' in roles %}
+    <input type="hidden" name="mode" value="gs1"/>
+    {% else %}
+    <input type="hidden" name="mode" value="etim"/>
+    {% endif %}
 
     <!-- ================================================================
          SECTION 1 – Header-Daten
@@ -79,18 +116,36 @@
             Sprachen <span class="text-danger">*</span>
           </label>
           <div class="lang-btn-group d-flex flex-wrap gap-2" role="group" aria-label="Sprachen">
-            <input type="checkbox" class="btn-check" name="languages" value="ger" id="lang_ger" autocomplete="off"/>
-            <label class="btn btn-outline-secondary" for="lang_ger">
-              <i class="bi bi-translate me-1"></i>Deutsch
-            </label>
-            <input type="checkbox" class="btn-check" name="languages" value="eng" id="lang_eng" autocomplete="off"/>
-            <label class="btn btn-outline-secondary" for="lang_eng">
-              <i class="bi bi-translate me-1"></i>Englisch
-            </label>
-            <input type="checkbox" class="btn-check" name="languages" value="slo" id="lang_slo" autocomplete="off"/>
-            <label class="btn btn-outline-secondary" for="lang_slo">
-              <i class="bi bi-translate me-1"></i>Slowakisch
-            </label>
+            <span class="lang-option" data-modes="etim">
+              <input type="checkbox" class="btn-check" name="languages" value="ger" id="lang_ger" autocomplete="off"/>
+              <label class="btn btn-outline-secondary" for="lang_ger">
+                <i class="bi bi-translate me-1"></i>Deutsch
+              </label>
+            </span>
+            <span class="lang-option" data-modes="etim gs1">
+              <input type="checkbox" class="btn-check" name="languages" value="eng" id="lang_eng" autocomplete="off"/>
+              <label class="btn btn-outline-secondary" for="lang_eng">
+                <i class="bi bi-translate me-1"></i>Englisch
+              </label>
+            </span>
+            <span class="lang-option" data-modes="etim">
+              <input type="checkbox" class="btn-check" name="languages" value="slo" id="lang_slo" autocomplete="off"/>
+              <label class="btn btn-outline-secondary" for="lang_slo">
+                <i class="bi bi-translate me-1"></i>Slowakisch
+              </label>
+            </span>
+            <span class="lang-option" data-modes="gs1">
+              <input type="checkbox" class="btn-check" name="languages" value="nl" id="lang_nl" autocomplete="off"/>
+              <label class="btn btn-outline-secondary" for="lang_nl">
+                <i class="bi bi-translate me-1"></i>Niederländisch
+              </label>
+            </span>
+            <span class="lang-option" data-modes="gs1">
+              <input type="checkbox" class="btn-check" name="languages" value="fr" id="lang_fr" autocomplete="off"/>
+              <label class="btn btn-outline-secondary" for="lang_fr">
+                <i class="bi bi-translate me-1"></i>Französisch
+              </label>
+            </span>
           </div>
           <div id="langFeedback" class="invalid-feedback d-none" style="display:block!important">
             Mindestens eine Sprache muss ausgewählt sein.
@@ -286,6 +341,33 @@
    State
    ========================================================= */
 let validationPassed = false;
+
+/* =========================================================
+   Mode (etim / gs1) – Sprachen ein-/ausblenden
+   ========================================================= */
+function getCurrentMode() {
+  const checked = document.querySelector('input[name="mode"]:checked');
+  if (checked) return checked.value;
+  const hidden = document.querySelector('input[name="mode"][type="hidden"]');
+  return hidden ? hidden.value : 'etim';
+}
+
+function applyMode(mode) {
+  document.querySelectorAll('.lang-option').forEach(opt => {
+    const modes = opt.dataset.modes.split(' ');
+    const visible = modes.includes(mode);
+    opt.style.display = visible ? '' : 'none';
+    if (!visible) {
+      opt.querySelector('input').checked = false;
+    }
+  });
+  invalidateValidation();
+  runFormValidation();
+}
+
+document.querySelectorAll('input[name="mode"]').forEach(el => {
+  el.addEventListener('change', function () { applyMode(this.value); });
+});
 
 const mainForm         = document.getElementById('mainForm');
 const validateBtn      = document.getElementById('validateBtn');
@@ -776,6 +858,9 @@ async function parseResponse(resp) {
     warnings: [], row_count: 0, preview: [], kunnr_padded: ''
   };
 }
+
+// Initialer Mode beim Laden
+applyMode(getCurrentMode());
 </script>
 </body>
 </html>

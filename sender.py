@@ -10,13 +10,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TARGET_URL: str = os.getenv("TARGET_URL", "https://edi.eglo.com/dw/Request/ETIM10_Export/v1")
+DEFAULT_TARGET_URL: str = os.getenv("TARGET_URL_ETIM", os.getenv("TARGET_URL", "https://edi.eglo.com/dw/Request/ETIM10_Export/v1"))
 BASIC_AUTH_USER: str = os.getenv("BASIC_AUTH_USER", "")
 BASIC_AUTH_PASS: str = os.getenv("BASIC_AUTH_PASS", "")
 TIMEOUT_SECONDS: float = float(os.getenv("REQUEST_TIMEOUT", "30"))
 
 
-async def send_payload(payload: dict) -> dict:
+async def send_payload(payload: dict, target_url: str = None) -> dict:
     """
     POST *payload* as JSON to TARGET_URL.
 
@@ -30,12 +30,13 @@ async def send_payload(payload: dict) -> dict:
     Raises:
         Exception with a human-readable German error message on network failures.
     """
+    url = target_url or DEFAULT_TARGET_URL
     auth = (BASIC_AUTH_USER, BASIC_AUTH_PASS) if BASIC_AUTH_USER else None
 
     try:
         async with httpx.AsyncClient(verify=True) as client:
             response = await client.post(
-                TARGET_URL,
+                url,
                 json=payload,
                 auth=auth,
                 headers={"Content-Type": "application/json; charset=utf-8"},
@@ -46,7 +47,7 @@ async def send_payload(payload: dict) -> dict:
             f"Zeitüberschreitung nach {int(TIMEOUT_SECONDS)} s – der Ziel-Server antwortet nicht."
         )
     except httpx.ConnectError:
-        raise Exception(f"Verbindung fehlgeschlagen zu: {TARGET_URL}")
+        raise Exception(f"Verbindung fehlgeschlagen zu: {url}")
     except httpx.RequestError as exc:
         raise Exception(f"HTTP-Anfragefehler: {exc}")
 

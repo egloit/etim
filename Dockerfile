@@ -7,7 +7,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY main.py parser.py validator.py json_builder.py sender.py ./
+COPY main.py auth.py parser.py validator.py json_builder.py sender.py ./
 COPY templates/ templates/
 
 # Non-root user for security
