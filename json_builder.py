@@ -10,7 +10,7 @@ Output structure:
         {
           "Preise": "none",
           "Bestand": "false",
-          "Sprache_list": [ {"Sprache": "ger"}, ... ],
+          "Sprache_list": [ {"Sprache": "<code aus language_mapping.json>"}, ... ],
           "Verkaeufer": [ {"VKORG": ..., "VTWEG": ..., "SPART": ..., "WERKS": ...} ],
           "Kunde": [ {"KUNNR": "0000311804"} ]
         }
@@ -19,7 +19,29 @@ Output structure:
   ]
 }
 """
+import json
 from datetime import datetime
+from pathlib import Path
+
+_LANGUAGE_CONFIG_PATH = Path(__file__).with_name("language_mapping.json")
+
+
+def _load_language_config() -> dict:
+    """Read language_mapping.json fresh on every call so edits take effect
+    without an app restart. Falls back to an empty mapping (→ codes pass
+    through unchanged) if the file is missing or invalid."""
+    try:
+        with open(_LANGUAGE_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _map_lang(lang: str, mode: str, config: dict) -> str:
+    overrides = config.get("_mode_overrides", {}).get(mode, {})
+    if lang in overrides:
+        return overrides[lang]
+    return config.get(lang, lang)
 
 
 def build_json(
@@ -31,12 +53,14 @@ def build_json(
     vtweg: str,
     werks: str,
     email: str = "",
+    mode: str = "etim",
 ) -> dict:
     kunnr_padded = kunnr.strip().zfill(10)
 
     matnr_tab = [_build_material_entry(row) for row in rows]
 
-    sprache_list = [{"Sprache": lang} for lang in languages]
+    lang_config = _load_language_config()
+    sprache_list = [{"Sprache": _map_lang(lang, mode, lang_config)} for lang in languages]
 
     return {
         "Materialliste": [

@@ -136,8 +136,6 @@ async def auth_callback(
         )
 
     claims = result.get("id_token_claims", {})
-    logger.info("DEBUG claims keys: %s", list(claims.keys()))
-    logger.info("DEBUG token_groups: %s", claims.get("groups", []))
     token_groups = claims.get("groups", [])
     roles = []
     if GROUP_ETIM_ID and GROUP_ETIM_ID in token_groups:
@@ -297,7 +295,7 @@ async def json_preview_endpoint(
             }
         )
 
-    payload = build_json(rows, lang_list, kunnr, vkorg, spart, vtweg, werks, email)
+    payload = build_json(rows, lang_list, kunnr, vkorg, spart, vtweg, werks, email, mode)
     return JSONResponse(
         {
             "success":   True,
@@ -379,7 +377,7 @@ async def submit_endpoint(
         )
 
     # Build JSON payload
-    payload = build_json(rows, lang_list, kunnr, vkorg, spart, vtweg, werks, email)
+    payload = build_json(rows, lang_list, kunnr, vkorg, spart, vtweg, werks, email, mode)
 
     logger.info(
         "SUBMIT | mode=%s | file=%s | rows=%d | kunnr=%s | vkorg=%s | spart=%s | vtweg=%s | werks=%s | langs=%s | warnings=%d",

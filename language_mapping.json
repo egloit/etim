@@ -1,0 +1,12 @@
+{
+  "_comment": "Zuordnung: Sprachauswahl im Formular (links) -> Code, der im JSON als 'Sprache' an den Zielrechner geschickt wird (rechts). Aenderungen wirken sofort, kein Neustart noetig.",
+  "ger": "ger",
+  "eng": "eng",
+  "slo": "slo",
+  "nl": "nl",
+  "fr": "fr",
+  "_mode_overrides_comment": "Optional: abweichende Codes je nach Modus (etim/gs1). Nur eintragen, wenn sich der Code fuer diesen Modus vom Standard oben unterscheiden soll.",
+  "_mode_overrides": {
+    "gs1": {}
+  }
+}
