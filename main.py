@@ -5,16 +5,18 @@ import json
 import logging
 import os
 import secrets
+from datetime import datetime
 from typing import Annotated, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from auth import TENANT_ID, exchange_code, get_auth_url, REDIRECT_URI
+from gs1_export.pipeline import PipelineError, export_batch
 from json_builder import build_json
 from parser import parse_file
 from sender import send_payload
@@ -374,6 +376,40 @@ async def submit_endpoint(
                 "warnings": [w.to_dict() for w in warnings],
                 "row_count": len(rows),
             }
+        )
+
+    # GS1: generate the classification XML directly instead of sending JSON.
+    if mode == "gs1":
+        matnrs = [r.get("Materialnummer", "").strip() for r in rows if r.get("Materialnummer", "").strip()]
+        try:
+            xml_bytes, export_warnings, validation_errors = export_batch(matnrs, lang_list, vkorg)
+        except PipelineError as exc:
+            logger.error("GS1 EXPORT ERROR | %s", exc)
+            return JSONResponse(
+                {
+                    "success": False,
+                    "errors": [{"field": "GS1-Export", "message": str(exc), "row": None}],
+                    "warnings": [w.to_dict() for w in warnings],
+                    "row_count": len(rows),
+                }
+            )
+
+        all_warnings = export_warnings + [w.message for w in warnings]
+        logger.info(
+            "GS1 EXPORT | file=%s | articles=%d | warnings=%d | validation_errors=%d",
+            file.filename, len(matnrs), len(all_warnings), len(validation_errors),
+        )
+
+        filename = f"gs1_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml"
+        return Response(
+            content=xml_bytes,
+            media_type="application/xml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Article-Count": str(len(matnrs)),
+                "X-Export-Warnings": json.dumps(all_warnings, ensure_ascii=False),
+                "X-Validation-Errors": json.dumps(validation_errors, ensure_ascii=False),
+            },
         )
 
     # Build JSON payload

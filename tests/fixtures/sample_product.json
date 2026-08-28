@@ -1,0 +1,121 @@
+{
+    "uuid": "001e3554-da62-43f1-8af9-fdeb51f11901",
+    "family": "ZUB",
+    "values": {
+        "sku": [
+            {"data": "592bcbcae1e3f9.79810458", "scope": null, "locale": null, "attribute_type": "pim_catalog_identifier"}
+        ],
+        "MATNR": [
+            {"data": "62053", "scope": null, "locale": null, "attribute_type": "pim_catalog_identifier"}
+        ],
+        "EAN11": [
+            {"data": "9002759620530", "scope": null, "locale": null, "attribute_type": "pim_catalog_text"}
+        ],
+        "ZZSER": [
+            {"data": "PASTERI PRO", "scope": null, "locale": null, "attribute_type": "pim_catalog_text"}
+        ],
+        "BRGEW": [
+            {"data": "0.4430", "scope": null, "locale": null, "attribute_type": "pim_catalog_number"}
+        ],
+        "SAP_SYNC": [
+            {"data": true, "scope": null, "locale": null, "attribute_type": "pim_catalog_boolean"}
+        ],
+        "PIM_PROJEKTSTART": [
+            {"data": "2017-05-29T00:00:00+00:00", "scope": null, "locale": null, "attribute_type": "pim_catalog_date"}
+        ],
+        "ZZTYPEN": [
+            {
+                "data": "ZZTYPEN_EAC",
+                "scope": null,
+                "locale": null,
+                "linked_data": {
+                    "code": "ZZTYPEN_EAC",
+                    "labels": {
+                        "de_AT": "[EAC] Zubehör",
+                        "en_GB": "[EAC] accessories",
+                        "fr_FR": "[EAC] accessoire",
+                        "nl_NL": "[EAC] accessoires"
+                    },
+                    "attribute": "ZZTYPEN"
+                },
+                "attribute_type": "pim_catalog_simpleselect"
+            }
+        ],
+        "ZZGLASF": [
+            {
+                "data": "ZZGLASF_C12",
+                "scope": null,
+                "locale": null,
+                "linked_data": {
+                    "code": "ZZGLASF_C12",
+                    "labels": {
+                        "de_AT": "[C12] cappuccino, gold",
+                        "en_GB": "[C12] cappuccino, gold",
+                        "fr_FR": "[C12] cappuccino, or",
+                        "nl_NL": "[C12] cappucino, goud"
+                    },
+                    "attribute": "ZZGLASF"
+                },
+                "attribute_type": "pim_catalog_simpleselect"
+            }
+        ],
+        "ZZNETZS": [
+            {
+                "data": "ZZNETZS_00",
+                "scope": null,
+                "locale": null,
+                "linked_data": {
+                    "code": "ZZNETZS_00",
+                    "labels": {
+                        "de_AT": "[00] ohne",
+                        "en_GB": "[00] without",
+                        "fr_FR": "[00] sans",
+                        "nl_NL": "[00] zonder"
+                    },
+                    "attribute": "ZZNETZS"
+                },
+                "attribute_type": "pim_catalog_simpleselect"
+            }
+        ],
+        "B2C_FILTER_COLOR": [
+            {
+                "data": ["B2C_FILTER_COLOR_GOLD"],
+                "scope": null,
+                "locale": null,
+                "linked_data": {
+                    "B2C_FILTER_COLOR_GOLD": {
+                        "code": "B2C_FILTER_COLOR_GOLD",
+                        "labels": {
+                            "de_AT": "Gold",
+                            "en_GB": "Gold",
+                            "fr_FR": "Or",
+                            "nl_NL": "Goud"
+                        },
+                        "attribute": "B2C_FILTER_COLOR"
+                    }
+                },
+                "attribute_type": "pim_catalog_multiselect"
+            }
+        ],
+        "MAKTX": [
+            {"data": "SCHIRM H-250, B-250 CAPPUCCINO/GOLD", "scope": null, "locale": "de_AT", "attribute_type": "pim_catalog_text"},
+            {"data": "SCHIRM H-250, B-250 CAPPUCCINO/GOLD", "scope": null, "locale": "en_GB", "attribute_type": "pim_catalog_text"},
+            {"data": "Abat-jour H-250, B-250 CAPPUCCINO/OR", "scope": null, "locale": "fr_FR", "attribute_type": "pim_catalog_text"},
+            {"data": "SCHIRM H-250, B-250 CAPPUCCINO/GOLD", "scope": null, "locale": "nl_NL", "attribute_type": "pim_catalog_text"}
+        ],
+        "pim_bounding_box_width": [
+            {
+                "data": {"unit": "MILLIMETER", "amount": "110.00", "symbol": "mm"},
+                "scope": null,
+                "locale": null,
+                "attribute_type": "pim_catalog_metric"
+            }
+        ],
+        "PIM_glas_shadecolour_main": [
+            {"data": "cappuccino", "scope": null, "locale": null, "attribute_type": "akeneo_reference_entity", "reference_data_name": "colours_entity"}
+        ]
+    },
+    "created": "2022-02-11T15:34:46+00:00",
+    "enabled": true,
+    "updated": "2026-07-16T16:09:56+00:00"
+}

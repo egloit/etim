@@ -7,3 +7,7 @@ jinja2==3.1.5
 python-dotenv==1.0.1
 msal==1.31.0
 itsdangerous==2.2.0
+psycopg[binary]==3.2.*
+lxml>=5.3,<7
+hdbcli==2.29.*
+pytest==8.3.*

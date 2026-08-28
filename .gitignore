@@ -3,3 +3,6 @@
 .idea/
 docker-compose.override.yml
 SSO_Azure.txt
+__pycache__/
+.pytest_cache/
+verify_xsd_output.xml

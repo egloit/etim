@@ -1,0 +1,5 @@
+{
+  "_comment": "VKORG (aus dem Formular) -> targetMarketCountryCode (UN M49 numerisch, wie im GS1-GDSN-Beispiel: '056' = Belgien). Noch vom User zu befuellen, solange leer wird der Zielmarkt im XML ausgelassen und eine Warnung ausgegeben.",
+  "0025": "528",
+  "0012": "056"
+}

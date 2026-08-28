@@ -621,8 +621,14 @@ async function doSubmit() {
   try {
     const fd = new FormData(mainForm);
     const resp = await fetch('/submit', { method: 'POST', body: fd });
-    const data = await parseResponse(resp);
-    showResult(data);
+    const ct = resp.headers.get('content-type') || '';
+
+    if (ct.includes('xml')) {
+      await handleGs1Download(resp);
+    } else {
+      const data = await parseResponse(resp);
+      showResult(data);
+    }
   } catch (e) {
     showResult({
       success: false,
@@ -638,6 +644,48 @@ async function doSubmit() {
 
 submitBtn.addEventListener('click',  doSubmit);
 submitBtn2.addEventListener('click', doSubmit);
+
+/* =========================================================
+   GS1: XML-Antwort als Datei herunterladen
+   ========================================================= */
+async function handleGs1Download(resp) {
+  const articleCount = resp.headers.get('X-Article-Count') || '0';
+  let warnings = [];
+  let validationErrors = [];
+  try { warnings = JSON.parse(resp.headers.get('X-Export-Warnings') || '[]'); } catch (e) {}
+  try { validationErrors = JSON.parse(resp.headers.get('X-Validation-Errors') || '[]'); } catch (e) {}
+
+  const blob = await resp.blob();
+  const cd = resp.headers.get('content-disposition') || '';
+  const match = cd.match(/filename="?([^"]+)"?/);
+  const filename = match ? match[1] : `gs1_export_${Date.now()}.xml`;
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  resultSection.classList.remove('d-none');
+  resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const content = document.getElementById('resultContent');
+  content.innerHTML = `
+    <div class="alert alert-success d-flex align-items-center gap-2">
+      <i class="bi bi-check-circle-fill fs-4"></i>
+      <div>
+        <strong>GS1-XML wurde erzeugt und heruntergeladen.</strong><br/>
+        ${articleCount} Artikel verarbeitet.
+        ${warnings.length > 0
+          ? `<br/><span class="text-warning-emphasis small">${warnings.length} Warnung(en): ${warnings.map(escHtml).join('; ')}</span>`
+          : ''}
+        ${validationErrors.length > 0
+          ? `<br/><span class="text-danger small">${validationErrors.length} XSD-Validierungsfehler – Datei bitte prüfen.</span>`
+          : ''}
+      </div>
+    </div>`;
+}
 
 /* =========================================================
    RESET
@@ -694,7 +742,9 @@ function showValidationResults(data) {
     validationPassed = true;
     submitArea.classList.remove('d-none');
     submitBtn2.disabled = false;
-    jsonPreviewBtn.classList.remove('d-none');
+    if (getCurrentMode() !== 'gs1') {
+      jsonPreviewBtn.classList.remove('d-none');
+    }
   } else {
     summaryEl.innerHTML = `
       <div class="alert alert-danger d-flex align-items-center gap-2 mb-3">

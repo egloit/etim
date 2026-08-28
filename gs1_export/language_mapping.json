@@ -1,0 +1,6 @@
+{
+  "_comment": "Bildet die im Web-Formular verwendeten GS1-Sprachcodes (Checkbox 'value') auf die PIM-Locale und den GS1 languageCode ab. Basierend auf einem echten GDSN-Export-Beispiel verwendet GS1 hier zweistellige ISO-639-1-Codes (en/fr/nl), nicht dreistellige.",
+  "eng": { "pim_locale": "en_GB", "gs1_code": "en" },
+  "nl":  { "pim_locale": "nl_NL", "gs1_code": "nl" },
+  "fr":  { "pim_locale": "fr_FR", "gs1_code": "fr" }
+}
