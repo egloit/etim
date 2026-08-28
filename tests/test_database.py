@@ -1,3 +1,7 @@
+from datetime import datetime
+
+import psycopg
+
 from gs1_export import database
 
 
@@ -42,3 +46,75 @@ def test_crosswalk_falls_back_to_wildcard_when_no_exact_match():
 def test_crosswalk_returns_none_without_exact_match_or_wildcard():
     conn = FakeConnection({"ZZTYPEN_EAL": "buiten"})
     assert database.get_pim_value_crosswalk(conn, "4.364", "ZZTYPEN_WAL") is None
+
+
+class _RecordingCursor:
+    """Captures the (query, params) of every execute() call, for asserting on
+    what get_changed_articles()/upsert_export_history() actually send to the
+    DB - independent of the narrow FakeCursor above, which assumes a fixed
+    query shape (single param lookup) not shared by these functions."""
+
+    def __init__(self, fetchall_result=None, raise_on_execute=None):
+        self.calls = []
+        self._fetchall_result = fetchall_result or []
+        self._raise_on_execute = raise_on_execute
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, query, params=None):
+        self.calls.append((query, params))
+        raises_here = "INSERT INTO" in query or "JOIN LATERAL" in query
+        if self._raise_on_execute and raises_here:
+            raise self._raise_on_execute
+
+    def fetchall(self):
+        return self._fetchall_result
+
+
+class _RecordingConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self):
+        return self._cursor
+
+
+def test_upsert_export_history_sends_expected_params():
+    cursor = _RecordingCursor()
+    conn = _RecordingConnection(cursor)
+    database.upsert_export_history(conn, "43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com")
+    query, params = cursor.calls[0]
+    assert "INSERT INTO public.gs1_export_history" in query
+    assert params == ("43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com")
+
+
+def test_upsert_export_history_tolerates_missing_table():
+    cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
+    conn = _RecordingConnection(cursor)
+    # Must not raise - a missing table must never abort an otherwise-successful export.
+    database.upsert_export_history(conn, "43706", "10008403", "2026-08-21T10:00:00Z", None)
+
+
+def test_get_changed_articles_maps_rows():
+    now = datetime(2026, 8, 28, 9, 0, 0)
+    cursor = _RecordingCursor(fetchall_result=[
+        ("43706", now, "2026-08-20T10:00:00Z", "2026-08-27T15:30:00Z"),
+    ])
+    conn = _RecordingConnection(cursor)
+    result = database.get_changed_articles(conn)
+    assert result == [{
+        "matnr": "43706",
+        "exported_at": now.isoformat(),
+        "pim_updated_at_export": "2026-08-20T10:00:00Z",
+        "pim_updated_now": "2026-08-27T15:30:00Z",
+    }]
+
+
+def test_get_changed_articles_returns_empty_list_when_table_missing():
+    cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
+    conn = _RecordingConnection(cursor)
+    assert database.get_changed_articles(conn) == []

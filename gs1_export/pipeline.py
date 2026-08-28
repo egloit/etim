@@ -77,11 +77,18 @@ def _resolve_crosswalk_value(conn, pickid: str, pim_codes: list[str]) -> Optiona
     return gs1_mapping.get_pim_value_crosswalk_wildcard(conn, pickid)
 
 
-def export_batch(matnrs: list[str], lang_codes: list[str], vkorg: str = "") -> tuple[bytes, list[str], list[dict]]:
+def export_batch(
+    matnrs: list[str], lang_codes: list[str], vkorg: str = "", exported_by: Optional[str] = None
+) -> tuple[bytes, list[str], list[dict]]:
     """Build a combined GS1 XML document for *matnrs*.
 
     Returns (xml_bytes, warnings, validation_errors).
     Raises PipelineError on hard failures (e.g. DB connection).
+
+    Every article that makes it into the document also gets an
+    upsert_export_history() entry (matnr + PIM's "updated" timestamp at this
+    moment) - see get_changed_articles() for how that's used later to flag
+    articles whose PIM data has changed since their last export.
     """
     language_config = _load_json_config(_LANGUAGE_CONFIG_PATH)
     languages = [(code, language_config[code]) for code in lang_codes if code in language_config]
@@ -119,6 +126,8 @@ def export_batch(matnrs: list[str], lang_codes: list[str], vkorg: str = "") -> t
                 warnings.append(f"Artikel {matnr}: nicht in PIM gefunden.")
                 logger.warning("GS1 EXPORT | matnr=%s: nicht gefunden", matnr)
                 continue
+
+            pim_updated_at = database.get_product_updated_at(conn, matnr)
 
             zztypen_code = pim_reader.get_zztypen_code(product)
             if not zztypen_code:
@@ -311,6 +320,7 @@ def export_batch(matnrs: list[str], lang_codes: list[str], vkorg: str = "") -> t
             )
             catalogue_item = gs1_exporter.build_catalogue_item_element(trade_item)
             notifications.append(gs1_exporter.build_notification_element(catalogue_item, sender_gln=GS1_SENDER_GLN))
+            database.upsert_export_history(conn, matnr, brick_id, pim_updated_at, exported_by)
     finally:
         conn.close()
 
@@ -323,3 +333,21 @@ def export_batch(matnrs: list[str], lang_codes: list[str], vkorg: str = "") -> t
     validation_errors = validator.validate_xml(xml_bytes)
 
     return xml_bytes, warnings, validation_errors
+
+
+def get_changed_articles() -> list[dict]:
+    """Previously GS1-exported articles whose PIM data has changed since
+    their last export (see database.get_changed_articles()). Opens its own
+    connection, same self-contained pattern as export_batch(). Raises
+    PipelineError on hard failures (e.g. DB unreachable); returns [] if
+    gs1_export_history doesn't exist yet (nothing exported/tracked so far).
+    """
+    try:
+        conn = database.get_connection()
+    except Exception as exc:
+        raise PipelineError(f"Datenbankverbindung fehlgeschlagen: {exc}") from exc
+
+    try:
+        return database.get_changed_articles(conn)
+    finally:
+        conn.close()

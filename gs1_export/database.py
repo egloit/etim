@@ -56,6 +56,25 @@ def get_product_by_matnr(conn: psycopg.Connection, matnr: str) -> Optional[dict]
         return row[0] if row else None
 
 
+def get_product_updated_at(conn: psycopg.Connection, matnr: str) -> Optional[str]:
+    """Return the "updated" timestamp string of the newest enabled PIM row for
+    *matnr* - used to snapshot "PIM state at export time" in
+    gs1_export_history, see upsert_export_history()/get_changed_articles()."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT updated
+            FROM public.pim_egloakeneo_product
+            WHERE matnr = %s AND enabled = TRUE
+            ORDER BY updated DESC
+            LIMIT 1
+            """,
+            (matnr,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
 def get_brick_id(conn: psycopg.Connection, zztypen_code: str) -> Optional[str]:
     with conn.cursor() as cur:
         cur.execute(
@@ -213,3 +232,77 @@ def get_pim_value_crosswalk(conn: psycopg.Connection, pick_id: str, pim_code: st
     if value is not None:
         return value
     return get_pim_value_crosswalk_wildcard(conn, pick_id)
+
+
+def upsert_export_history(
+    conn: psycopg.Connection,
+    matnr: str,
+    brick_id: Optional[str],
+    pim_updated_at_export: Optional[str],
+    exported_by: Optional[str],
+) -> None:
+    """Record/refresh "this matnr was GS1-exported, PIM's updated timestamp was
+    X at that time" in public.gs1_export_history - one row per matnr, latest
+    export wins. Used later by get_changed_articles() to flag articles whose
+    PIM data has changed since. Tolerant of the table not existing yet, same
+    pattern as the other lookups (a missing table here must never abort an
+    otherwise-successful export)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.gs1_export_history
+                    (matnr, brick_id, exported_at, pim_updated_at_export, exported_by)
+                VALUES (%s, %s, now(), %s, %s)
+                ON CONFLICT (matnr) DO UPDATE SET
+                    brick_id = EXCLUDED.brick_id,
+                    exported_at = EXCLUDED.exported_at,
+                    pim_updated_at_export = EXCLUDED.pim_updated_at_export,
+                    exported_by = EXCLUDED.exported_by
+                """,
+                (matnr, brick_id, pim_updated_at_export, exported_by),
+            )
+    except psycopg.errors.UndefinedTable:
+        logger.warning("gs1_export_history existiert noch nicht - Export-Historie wird nicht gespeichert.")
+
+
+def get_changed_articles(conn: psycopg.Connection) -> list[dict]:
+    """Articles that were GS1-exported before but whose PIM data has since
+    changed (current "updated" timestamp differs from the one snapshotted at
+    export time in gs1_export_history). Coarse/timestamp-only check - flags
+    "something changed", not which field. A LATERAL join keyed on the already
+    indexed matnr column keeps this fast even though pim_egloakeneo_product
+    has ~110k rows, since it only ever looks at the (small) set of matnrs
+    that are actually in the history table.
+
+    Tolerant of gs1_export_history not existing yet (returns [])."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = '5s'")
+            cur.execute(
+                """
+                SELECT h.matnr, h.exported_at, h.pim_updated_at_export, latest.updated
+                FROM public.gs1_export_history h
+                JOIN LATERAL (
+                    SELECT updated
+                    FROM public.pim_egloakeneo_product p
+                    WHERE p.matnr = h.matnr AND p.enabled = TRUE
+                    ORDER BY p.updated DESC
+                    LIMIT 1
+                ) latest ON TRUE
+                WHERE latest.updated IS DISTINCT FROM h.pim_updated_at_export
+                ORDER BY latest.updated DESC
+                """
+            )
+            return [
+                {
+                    "matnr": r[0],
+                    "exported_at": r[1].isoformat() if r[1] else None,
+                    "pim_updated_at_export": r[2],
+                    "pim_updated_now": r[3],
+                }
+                for r in cur.fetchall()
+            ]
+    except psycopg.errors.UndefinedTable:
+        logger.warning("gs1_export_history existiert noch nicht - keine Aenderungspruefung moeglich.")
+        return []

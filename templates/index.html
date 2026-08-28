@@ -72,6 +72,20 @@
 </nav>
 
 <div class="container-xl py-4">
+
+  {% if 'gs1' in roles %}
+  <div id="gs1ChangedPanel" class="alert alert-warning d-none mb-4">
+    <div class="d-flex align-items-start gap-2">
+      <i class="bi bi-exclamation-triangle-fill fs-5 mt-1"></i>
+      <div class="flex-grow-1">
+        <strong id="gs1ChangedTitle"></strong>
+        <div id="gs1ChangedList" class="small mt-1"></div>
+        <div class="text-muted small mt-1">Artikelnummern oben in einer neuen Datei hochladen, um die GS1-XML für diese Artikel neu zu erzeugen.</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <form id="mainForm" novalidate autocomplete="off">
 
     <!-- ================================================================
@@ -262,7 +276,7 @@
         <i class="bi bi-code-slash me-1"></i>JSON ansehen
       </button>
       <button type="button" id="submitBtn" class="btn btn-success px-4 d-none" disabled>
-        <i class="bi bi-send-fill me-1"></i>Senden
+        <i class="bi bi-send-fill me-1"></i><span id="submitBtnLabel">Senden</span>
       </button>
       <button type="button" id="resetBtn" class="btn btn-outline-secondary">
         <i class="bi bi-arrow-counterclockwise me-1"></i>Zurücksetzen
@@ -288,9 +302,9 @@
       <!-- Submit button inside result panel for UX flow -->
       <div id="submitArea" class="mt-3 d-none">
         <button type="button" id="submitBtn2" class="btn btn-success btn-lg px-5">
-          <i class="bi bi-send-fill me-2"></i>Jetzt senden
+          <i class="bi bi-send-fill me-2"></i><span id="submitBtn2Label">Jetzt senden</span>
         </button>
-        <span class="text-muted ms-3 small">Daten werden an den EGLO EDI-Server übertragen.</span>
+        <span id="submitHint" class="text-muted ms-3 small">Daten werden an den EGLO EDI-Server übertragen.</span>
       </div>
     </div>
   </div>
@@ -361,8 +375,19 @@ function applyMode(mode) {
       opt.querySelector('input').checked = false;
     }
   });
+  applySubmitLabels(mode);
   invalidateValidation();
   runFormValidation();
+}
+
+/* GS1 generiert nur eine Datei, sendet aber nichts an den EDI-Server */
+function applySubmitLabels(mode) {
+  const isGs1 = mode === 'gs1';
+  document.getElementById('submitBtnLabel').textContent  = isGs1 ? 'Generieren' : 'Senden';
+  document.getElementById('submitBtn2Label').textContent = isGs1 ? 'Jetzt generieren' : 'Jetzt senden';
+  document.getElementById('submitHint').textContent = isGs1
+    ? 'Die GS1-XML-Datei wird erzeugt und zum Download angeboten.'
+    : 'Daten werden an den EGLO EDI-Server übertragen.';
 }
 
 document.querySelectorAll('input[name="mode"]').forEach(el => {
@@ -616,7 +641,8 @@ document.getElementById('downloadJsonBtn').addEventListener('click', () => {
 async function doSubmit() {
   if (!runFormValidation()) return;
 
-  [submitBtn, submitBtn2].forEach(b => setButtonLoading(b, 'Sende…'));
+  const isGs1 = getCurrentMode() === 'gs1';
+  [submitBtn, submitBtn2].forEach(b => setButtonLoading(b, isGs1 ? 'Generiere…' : 'Sende…'));
 
   try {
     const fd = new FormData(mainForm);
@@ -636,8 +662,8 @@ async function doSubmit() {
       warnings: [], row_count: 0
     });
   } finally {
-    resetButton(submitBtn,  '<i class="bi bi-send-fill me-1"></i>Senden');
-    resetButton(submitBtn2, '<i class="bi bi-send-fill me-2"></i>Jetzt senden');
+    resetButton(submitBtn,  `<i class="bi bi-send-fill me-1"></i><span id="submitBtnLabel">${isGs1 ? 'Generieren' : 'Senden'}</span>`);
+    resetButton(submitBtn2, `<i class="bi bi-send-fill me-2"></i><span id="submitBtn2Label">${isGs1 ? 'Jetzt generieren' : 'Jetzt senden'}</span>`);
     [submitBtn, submitBtn2].forEach(b => b.disabled = false);
   }
 }
@@ -911,6 +937,32 @@ async function parseResponse(resp) {
 
 // Initialer Mode beim Laden
 applyMode(getCurrentMode());
+
+/* =========================================================
+   GS1: Hinweis auf Artikel mit PIM-Änderungen seit letztem Export
+   ========================================================= */
+async function loadGs1ChangedArticles() {
+  const panel = document.getElementById('gs1ChangedPanel');
+  if (!panel) return; // Nutzer hat keine GS1-Rolle, Panel wurde serverseitig nicht gerendert
+
+  try {
+    const resp = await fetch('/gs1/changed-articles');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const articles = data.articles || [];
+    if (articles.length === 0) return;
+
+    document.getElementById('gs1ChangedTitle').textContent =
+      `${articles.length} Artikel wurden im PIM geändert seit dem letzten GS1-Export:`;
+    document.getElementById('gs1ChangedList').innerHTML = articles
+      .map(a => `<code>${escHtml(a.matnr)}</code>`)
+      .join(', ');
+    panel.classList.remove('d-none');
+  } catch (e) {
+    // Netzwerkfehler beim Hintergrund-Check ist kein Grund, die Seite zu stören
+  }
+}
+loadGs1ChangedArticles();
 </script>
 </body>
 </html>

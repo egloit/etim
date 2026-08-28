@@ -21,6 +21,16 @@ class FakeConnection:
         pass
 
 
+@pytest.fixture(autouse=True)
+def _stub_export_history(monkeypatch):
+    """Most pipeline tests aren't about export-history tracking, and
+    FakeConnection has no cursor() - stub these to no-ops by default so
+    tests don't need to care. Tests that actually cover history recording
+    override this with a recording stub instead, see below."""
+    monkeypatch.setattr(database, "get_product_updated_at", lambda conn, matnr: None)
+    monkeypatch.setattr(database, "upsert_export_history", lambda *a, **k: None)
+
+
 def _trade_items(xml_bytes):
     root = etree.fromstring(xml_bytes)
     return root.findall(f".//transaction/documentCommand/{{{NS_CIN}}}catalogueItemNotification/catalogueItem/tradeItem")
@@ -455,3 +465,52 @@ def test_export_batch_skips_property_integer_without_number(monkeypatch, product
         "gdsnTradeItemClassification/additionalTradeItemClassification"
         "/additionalTradeItemClassificationValue/additionalTradeItemClassificationProperty"
     ) == []
+
+
+def test_export_batch_records_export_history_for_successful_matnr(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_product_updated_at", lambda conn, matnr: "2026-08-21T10:00:00Z")
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.020", "pimfeld": "ZZSER"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: None)
+
+    calls = []
+    monkeypatch.setattr(database, "upsert_export_history", lambda conn, *args: calls.append(args))
+
+    pipeline.export_batch(["62053"], ["eng"], exported_by="user@eglo.com")
+
+    assert calls == [("62053", "10000552", "2026-08-21T10:00:00Z", "user@eglo.com")]
+
+
+def test_export_batch_does_not_record_history_for_unknown_matnr(monkeypatch):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: None)
+    monkeypatch.setattr(validator, "validate_xml", lambda xml_bytes: [])
+
+    calls = []
+    monkeypatch.setattr(database, "upsert_export_history", lambda conn, *args: calls.append(args))
+
+    pipeline.export_batch(["999999"], ["eng"])
+
+    assert calls == []
+
+
+def test_get_changed_articles_delegates_to_database(monkeypatch):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_changed_articles", lambda conn: [{"matnr": "43706"}])
+
+    assert pipeline.get_changed_articles() == [{"matnr": "43706"}]
+
+
+def test_get_changed_articles_raises_pipeline_error_on_connection_failure(monkeypatch):
+    def boom():
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(database, "get_connection", boom)
+
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.get_changed_articles()

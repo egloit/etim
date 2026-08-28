@@ -16,7 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from auth import TENANT_ID, exchange_code, get_auth_url, REDIRECT_URI
-from gs1_export.pipeline import PipelineError, export_batch
+from gs1_export.pipeline import PipelineError, export_batch, get_changed_articles
 from json_builder import build_json
 from parser import parse_file
 from sender import send_payload
@@ -179,6 +179,23 @@ async def index(request: Request):
 def _get_target_url(mode: str) -> str:
     return TARGET_URL_GS1 if mode == "gs1" else TARGET_URL_ETIM
 
+
+@app.get("/gs1/changed-articles")
+async def gs1_changed_articles(request: Request):
+    """Articles previously exported via GS1 whose PIM data has changed since -
+    shown as a heads-up panel on the main page so the Vertrieb can decide
+    whether to re-run the GS1 export for them. Coarse check (any change to
+    the PIM "updated" timestamp), see gs1_export/database.get_changed_articles."""
+    if "gs1" not in request.session.get("user", {}).get("roles", []):
+        return JSONResponse({"articles": []})
+    try:
+        articles = get_changed_articles()
+    except PipelineError as exc:
+        logger.error("GS1 CHANGED-ARTICLES ERROR | %s", exc)
+        return JSONResponse({"articles": [], "error": str(exc)}, status_code=502)
+    return JSONResponse({"articles": articles})
+
+
 @app.post("/validate")
 async def validate_endpoint(
     languages: Annotated[Optional[List[str]], Form()] = None,
@@ -311,6 +328,7 @@ async def json_preview_endpoint(
 
 @app.post("/submit")
 async def submit_endpoint(
+    request: Request,
     languages: Annotated[Optional[List[str]], Form()] = None,
     kunnr: str = Form(default=""),
     vkorg: str = Form(default=""),
@@ -381,8 +399,9 @@ async def submit_endpoint(
     # GS1: generate the classification XML directly instead of sending JSON.
     if mode == "gs1":
         matnrs = [r.get("Materialnummer", "").strip() for r in rows if r.get("Materialnummer", "").strip()]
+        exported_by = request.session.get("user", {}).get("email") or None
         try:
-            xml_bytes, export_warnings, validation_errors = export_batch(matnrs, lang_list, vkorg)
+            xml_bytes, export_warnings, validation_errors = export_batch(matnrs, lang_list, vkorg, exported_by)
         except PipelineError as exc:
             logger.error("GS1 EXPORT ERROR | %s", exc)
             return JSONResponse(
