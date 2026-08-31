@@ -37,6 +37,14 @@ _VKORG_VAT_CONFIG_PATH = Path(__file__).with_name("vkorg_vat_mapping.json")
 # combines fan + light wattage as "22W = FAN; 18W = LIGHT").
 _SUM_ALL_NUMBERS_PICKS = {"7.041"}
 
+# 4.226 (FSC Mark Indicator, MATKL-sourced): user's rule is "TRUE if the raw
+# code contains the substring FSC, else FALSE" - checked directly against the
+# raw code instead of via gs1_pim_value_crosswalk, since MATKL gets new
+# FSC-certified material codes over time and an exact-match crosswalk table
+# silently mis-resolves any not yet added to it as FALSE (found live on
+# 2026-08-31: 27 real FSC_* codes not in the crosswalk).
+_FSC_SUBSTRING_PICKS = {"4.226"}
+
 GS1_SENDER_GLN = os.getenv("GS1_SENDER_GLN", "")
 GS1_SENDER_PARTY_NAME = os.getenv("GS1_SENDER_PARTY_NAME", "EGLO")
 GS1_RECEIVER_GLN = os.getenv("GS1_RECEIVER_GLN", "")
@@ -213,7 +221,10 @@ def export_batch(
                         )
                         continue
 
-                    code_value = _resolve_crosswalk_value(conn, pickid, pim_codes)
+                    if pickid in _FSC_SUBSTRING_PICKS:
+                        code_value = "TRUE" if any("FSC" in c.upper() for c in pim_codes) else "FALSE"
+                    else:
+                        code_value = _resolve_crosswalk_value(conn, pickid, pim_codes)
                     if not code_value:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s pim_codes=%s: kein Crosswalk-Eintrag "

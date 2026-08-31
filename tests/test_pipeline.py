@@ -291,6 +291,48 @@ def test_export_batch_builds_property_code_via_crosswalk(monkeypatch, product):
     assert props[0].find("propertyDescription") is None
 
 
+@pytest.mark.parametrize(
+    "matkl_code, expected",
+    [
+        ("MATKL_FSC100NEWCODE", "TRUE"),  # not in gs1_pim_value_crosswalk at all
+        ("MATKL_888888", "FALSE"),  # has an (unused) crosswalk row also saying FALSE
+        ("MATKL_ORDINARY", "FALSE"),
+    ],
+)
+def test_export_batch_builds_property_code_4_226_via_fsc_substring_not_crosswalk(
+    monkeypatch, product, matkl_code, expected
+):
+    """4.226 checks the raw code for "FSC" directly - gs1_pim_value_crosswalk
+    is never consulted for this pick, so a code missing from (or even
+    contradicting) the crosswalk table still resolves correctly."""
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10008403")
+    monkeypatch.setattr(
+        database,
+        "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.226", "pimfeld": "MATKL"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyCode")
+
+    def boom_crosswalk(*a, **k):
+        raise AssertionError("gs1_pim_value_crosswalk must not be consulted for pick 4.226")
+
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_exact", boom_crosswalk)
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_wildcard", boom_crosswalk)
+    product["values"]["MATKL"] = [{"data": matkl_code}]
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    items = _trade_items(xml_bytes)
+    props = items[0].findall(
+        "gdsnTradeItemClassification/additionalTradeItemClassification"
+        "/additionalTradeItemClassificationValue/additionalTradeItemClassificationProperty"
+    )
+    assert len(props) == 1
+    assert props[0].find("propertyCode").text == expected
+
+
 def test_export_batch_property_code_checks_all_multiselect_codes(monkeypatch, product):
     """Multiselect fields can have several selected codes; the crosswalk must be
     checked against ALL of them (not just the first) before falling back to the
