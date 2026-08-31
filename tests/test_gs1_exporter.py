@@ -2,11 +2,17 @@ from lxml import etree
 
 from gs1_export.gs1_exporter import (
     NS_CIN,
+    NS_DELIVERY_PURCHASING_INFORMATION,
     NS_DUTY_FEE_TAX,
     NS_LIGHTING_DEVICE,
+    NS_PLACE_OF_ITEM_ACTIVITY,
     NS_SBDH,
+    NS_TRADE_ITEM_DESCRIPTION,
+    NS_TRADE_ITEM_MEASUREMENTS,
+    NS_VARIABLE_TRADE_ITEM_INFORMATION,
     build_catalogue_item_element,
     build_code_property_element,
+    build_delivery_purchasing_information_module_element,
     build_description_property_element,
     build_document,
     build_duty_fee_tax_information_module_element,
@@ -14,8 +20,12 @@ from gs1_export.gs1_exporter import (
     build_lighting_device_module_element,
     build_measurement_property_element,
     build_notification_element,
+    build_place_of_item_activity_module_element,
     build_string_property_element,
+    build_trade_item_description_module_element,
     build_trade_item_element,
+    build_trade_item_measurements_module_element,
+    build_variable_trade_item_information_module_element,
 )
 
 
@@ -32,6 +42,8 @@ def test_build_trade_item_element_structure():
         sender_gln="8719333022437",
         sender_party_name="EGLO",
         target_market_country_code="056",
+        contact_name="EGLO SAP Support",
+        contact_email="sap.support@eglo.com",
     )
 
     assert item.find("gtin").text == "09002759620530"
@@ -42,6 +54,19 @@ def test_build_trade_item_element_structure():
     assert item.find("targetMarket/targetMarketCountryCode").text == "056"
     # tradeItemSynchronisationDates is minOccurs="1" in TradeItem.xsd - must always be present.
     assert item.find("tradeItemSynchronisationDates/lastChangeDateTime") is not None
+    assert item.find("tradeItemSynchronisationDates/effectiveDateTime") is not None
+    # Fixed value per GS1's own error response (500.593) for consumer units.
+    contact = item.find("tradeItemContactInformation")
+    assert contact.find("contactTypeCode").text == "BZL"
+    # Element order matches TradeItemContactInformationType's sequence in TradeItem.xsd.
+    assert [etree.QName(c).localname for c in contact] == [
+        "contactTypeCode", "contactAddress", "contactName", "targetMarketCommunicationChannel",
+    ]
+    assert contact.find("contactAddress").text == "sap.support@eglo.com"
+    assert contact.find("contactName").text == "EGLO SAP Support"
+    channel = contact.find("targetMarketCommunicationChannel/communicationChannel")
+    assert channel.find("communicationChannelCode").text == "EMAIL"
+    assert channel.find("communicationValue").text == "sap.support@eglo.com"
 
     props = item.findall(
         "gdsnTradeItemClassification/additionalTradeItemClassification"
@@ -181,3 +206,109 @@ def test_build_document_combines_multiple_articles_into_one_transaction():
 
     trade_items = root.findall(f".//transaction/documentCommand/{{{NS_CIN}}}catalogueItemNotification/catalogueItem/tradeItem")
     assert [i.find("additionalTradeItemIdentification").text for i in trade_items] == ["111", "222"]
+
+
+def test_build_trade_item_measurements_module_element_full():
+    module = build_trade_item_measurements_module_element(
+        depth=185, width=185, height=215, gross_weight=665, net_weight=590, net_content=1,
+    )
+
+    assert etree.QName(module).localname == "tradeItemMeasurementsModule"
+    assert etree.QName(module).namespace == NS_TRADE_ITEM_MEASUREMENTS
+    measurements = module.find("tradeItemMeasurements")
+    # Element order verified against a real GS1-portal reference export.
+    assert [etree.QName(c).localname for c in measurements] == [
+        "depth", "height", "netContent", "width", "tradeItemWeight",
+    ]
+    assert measurements.find("depth").text == "185"
+    assert measurements.find("depth").get("measurementUnitCode") == "MMT"
+    assert measurements.find("tradeItemWeight/grossWeight").text == "665"
+    assert measurements.find("tradeItemWeight/grossWeight").get("measurementUnitCode") == "GRM"
+    assert measurements.find("tradeItemWeight/netWeight").text == "590"
+
+
+def test_build_trade_item_measurements_module_element_omits_missing_values():
+    module = build_trade_item_measurements_module_element(gross_weight=595)
+
+    measurements = module.find("tradeItemMeasurements")
+    assert measurements.find("depth") is None
+    assert measurements.find("width") is None
+    assert measurements.find("height") is None
+    assert measurements.find("netContent") is None
+    assert measurements.find("tradeItemWeight/grossWeight").text == "595"
+    assert measurements.find("tradeItemWeight/netWeight") is None
+
+
+def test_build_trade_item_description_module_element():
+    module = build_trade_item_description_module_element(
+        descriptions_by_language={"en": "WL/1 white/oak-optic TOWNSHEND", "nl": "WL/1 WEISS/EICHE-OPTIK TOWNSHEND"},
+        functional_names_by_language={"en": "WALL LIGHT", "nl": "WANDLAMP"},
+        brand_name="EGLO",
+    )
+
+    assert etree.QName(module).localname == "tradeItemDescriptionModule"
+    assert etree.QName(module).namespace == NS_TRADE_ITEM_DESCRIPTION
+    info = module.find("tradeItemDescriptionInformation")
+    # Element order verified against a real GS1-portal reference export.
+    assert [etree.QName(c).localname for c in info] == [
+        "descriptionShort", "descriptionShort", "functionalName", "functionalName",
+        "tradeItemDescription", "tradeItemDescription", "brandNameInformation",
+    ]
+    short_descs = {d.get("languageCode"): d.text for d in info.findall("descriptionShort")}
+    assert short_descs == {"en": "WL/1 white/oak-optic TOWNSHEND", "nl": "WL/1 WEISS/EICHE-OPTIK TOWNSHEND"}
+    functional_names = {d.get("languageCode"): d.text for d in info.findall("functionalName")}
+    assert functional_names == {"en": "WALL LIGHT", "nl": "WANDLAMP"}
+    assert info.find("brandNameInformation/brandName").text == "EGLO"
+
+
+def test_build_trade_item_description_module_element_omits_brand_when_empty():
+    module = build_trade_item_description_module_element(
+        descriptions_by_language={"en": "Text"}, functional_names_by_language={"en": "Text"}, brand_name="",
+    )
+    assert module.find("tradeItemDescriptionInformation/brandNameInformation") is None
+
+
+def test_build_place_of_item_activity_module_element_with_import_classification():
+    module = build_place_of_item_activity_module_element(
+        country_of_origin_code="156", import_classification_value="94051990",
+    )
+
+    assert etree.QName(module).localname == "placeOfItemActivityModule"
+    assert etree.QName(module).namespace == NS_PLACE_OF_ITEM_ACTIVITY
+    # importClassification comes before placeOfProductActivity in the reference export.
+    assert [etree.QName(c).localname for c in module] == ["importClassification", "placeOfProductActivity"]
+    assert module.find("importClassification/importClassificationTypeCode").text == "INTRASTAT"
+    assert module.find("importClassification/importClassificationValue").text == "94051990"
+    assert module.find("placeOfProductActivity/countryOfOrigin/countryCode").text == "156"
+
+
+def test_build_place_of_item_activity_module_element_without_import_classification():
+    module = build_place_of_item_activity_module_element(country_of_origin_code="356")
+    assert module.find("importClassification") is None
+    assert module.find("placeOfProductActivity/countryOfOrigin/countryCode").text == "356"
+
+
+def test_build_variable_trade_item_information_module_element_defaults_to_false():
+    module = build_variable_trade_item_information_module_element()
+
+    assert etree.QName(module).localname == "variableTradeItemInformationModule"
+    assert etree.QName(module).namespace == NS_VARIABLE_TRADE_ITEM_INFORMATION
+    assert module.find("variableTradeItemInformation/isTradeItemAVariableUnit").text == "false"
+
+
+def test_build_variable_trade_item_information_module_element_true():
+    module = build_variable_trade_item_information_module_element(True)
+    assert module.find("variableTradeItemInformation/isTradeItemAVariableUnit").text == "true"
+
+
+def test_build_delivery_purchasing_information_module_element_uses_given_value():
+    module = build_delivery_purchasing_information_module_element("2026-08-28T12:00:00Z")
+
+    assert etree.QName(module).localname == "deliveryPurchasingInformationModule"
+    assert etree.QName(module).namespace == NS_DELIVERY_PURCHASING_INFORMATION
+    assert module.find("deliveryPurchasingInformation/startAvailabilityDateTime").text == "2026-08-28T12:00:00Z"
+
+
+def test_build_delivery_purchasing_information_module_element_defaults_to_now():
+    module = build_delivery_purchasing_information_module_element()
+    assert module.find("deliveryPurchasingInformation/startAvailabilityDateTime").text is not None

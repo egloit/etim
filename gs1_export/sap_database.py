@@ -34,3 +34,50 @@ def get_connection() -> dbapi.Connection:
         password=HANA_PASSWORD,
         currentSchema=HANA_SCHEMA or None,
     )
+
+
+def get_material_measurements(conn: dbapi.Connection, matnr: str) -> Optional[dict]:
+    """Weight/dimensions from MARA (General Material Data), one row per
+    material. Reliably has BRGEW/NTGEW/GEWEI (weight); LAENG/BREIT/HOEHE
+    (dimensions) are frequently 0/unset in practice - see pipeline.py, which
+    treats a 0 dimension as "not available" rather than sending it as-is."""
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT BRGEW, NTGEW, GEWEI, LAENG, BREIT, HOEHE, MEABM, VOLUM, VOLEH "
+        "FROM MARA WHERE MATNR = ?",
+        (matnr,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "gross_weight": row[0], "net_weight": row[1], "weight_unit": row[2],
+        "length": row[3], "width": row[4], "height": row[5], "dimension_unit": row[6],
+        "volume": row[7], "volume_unit": row[8],
+    }
+
+
+def get_material_descriptions(conn: dbapi.Connection, matnr: str) -> dict[str, str]:
+    """Material description texts (MAKT), keyed by SAP's own language code
+    (SPRAS, e.g. "D"/"E"/"F"/"N" - not ISO) - see
+    gs1_export/sap_language_mapping.json for the SPRAS -> GS1 languageCode
+    translation. Many SPRAS rows are just a copy of the German text rather
+    than a real translation - not something we can detect/fix here."""
+    cur = conn.cursor()
+    cur.execute("SELECT SPRAS, MAKTX FROM MAKT WHERE MATNR = ?", (matnr,))
+    return {row[0]: row[1] for row in cur.fetchall() if row[1]}
+
+
+def get_material_origin(conn: dbapi.Connection, matnr: str, werks: str) -> Optional[dict]:
+    """Country of origin (HERKL) and customs tariff number (STAWN) from MARC
+    (Plant Data), which is plant-specific (WERKS) - the same matnr can have a
+    different HERKL per plant (e.g. most EGLO plants "IN", one seen "CN")."""
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT HERKL, STAWN FROM MARC WHERE MATNR = ? AND WERKS = ?",
+        (matnr, werks),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return {"country_of_origin": row[0], "customs_tariff_number": row[1]}

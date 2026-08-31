@@ -21,7 +21,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from . import database, gs1_exporter, gs1_mapping, pim_reader, validator
+from . import database, gs1_exporter, gs1_mapping, pim_reader, sap_database, validator
 
 load_dotenv()
 
@@ -30,6 +30,15 @@ logger = logging.getLogger(__name__)
 _LANGUAGE_CONFIG_PATH = Path(__file__).with_name("language_mapping.json")
 _VKORG_COUNTRY_CONFIG_PATH = Path(__file__).with_name("vkorg_country_mapping.json")
 _VKORG_VAT_CONFIG_PATH = Path(__file__).with_name("vkorg_vat_mapping.json")
+_SAP_LANGUAGE_CONFIG_PATH = Path(__file__).with_name("sap_language_mapping.json")
+_COUNTRY_CODE_CONFIG_PATH = Path(__file__).with_name("country_code_mapping.json")
+
+# SAP MARA.GEWEI/MEABM -> GS1 UN/CEFACT measurementUnitCode. Fixed technical
+# unit codes (not business data), so no external mapping file needed. Weight
+# is always normalised to grams and dimensions to millimetres, matching the
+# units used in a real GS1-portal reference export for matnr 43706.
+_SAP_WEIGHT_UNIT_TO_GRAMS_FACTOR = {"KG": 1000, "G": 1}
+_SAP_DIMENSION_UNIT_TO_MM_FACTOR = {"MM": 1, "CM": 10, "M": 1000}
 
 # Picks whose propertyMeasurement value is the sum of several numbers found in
 # one free-text PIM field, rather than a single clean number (e.g. 7.041
@@ -49,6 +58,9 @@ GS1_SENDER_GLN = os.getenv("GS1_SENDER_GLN", "")
 GS1_SENDER_PARTY_NAME = os.getenv("GS1_SENDER_PARTY_NAME", "EGLO")
 GS1_RECEIVER_GLN = os.getenv("GS1_RECEIVER_GLN", "")
 GS1_ADDITIONAL_CLASSIFICATION_SYSTEM_CODE = os.getenv("GS1_ADDITIONAL_CLASSIFICATION_SYSTEM_CODE", "64")
+# Fixed EGLO-wide support contact for tradeItemContactInformation, not article-specific.
+GS1_SUPPORT_CONTACT_NAME = os.getenv("GS1_SUPPORT_CONTACT_NAME", "EGLO SAP Support")
+GS1_SUPPORT_CONTACT_EMAIL = os.getenv("GS1_SUPPORT_CONTACT_EMAIL", "sap.support@eglo.com")
 
 
 class PipelineError(Exception):
@@ -70,6 +82,114 @@ def _gtin_from_ean(ean: str) -> str:
     return ean.zfill(14) if ean else ""
 
 
+def _weight_in_grams(value, unit: str) -> Optional[int]:
+    """Normalise a SAP MARA weight (BRGEW/NTGEW, GEWEI unit) to whole grams,
+    matching the unit used in a real GS1-portal reference export. None if the
+    value is 0/missing or the unit isn't one of the ones seen in practice
+    (KG/G) - never guess a conversion factor."""
+    if value is None:
+        return None
+    factor = _SAP_WEIGHT_UNIT_TO_GRAMS_FACTOR.get((unit or "").strip().upper())
+    if factor is None:
+        return None
+    grams = round(float(value) * factor)
+    return grams if grams > 0 else None
+
+
+def _dimension_in_mm(value, unit: str) -> Optional[int]:
+    """Normalise a SAP MARA/MARM dimension (LAENG/BREIT/HOEHE, MEABM unit) to
+    whole millimetres. None if 0/missing or an unrecognised unit - SAP
+    dimensions are frequently just unset (0, no unit) in practice."""
+    if value is None:
+        return None
+    factor = _SAP_DIMENSION_UNIT_TO_MM_FACTOR.get((unit or "").strip().upper())
+    if factor is None:
+        return None
+    mm = round(float(value) * factor)
+    return mm if mm > 0 else None
+
+
+def _build_sap_extension_modules(
+    hana_conn,
+    matnr: str,
+    werks: str,
+    languages: list[tuple[str, dict]],
+    sap_language_config: dict,
+    country_code_config: dict,
+) -> list:
+    """Measurements/description/origin extension modules sourced from SAP
+    HANA rather than the PIM - see sap_database.py. hana_conn is None if the
+    HANA connection itself failed (see export_batch); every lookup here is
+    independently best-effort, matching the "log and skip" philosophy used
+    for PIM-sourced properties elsewhere in this module."""
+    modules = []
+    if hana_conn is None:
+        return modules
+
+    measurements = sap_database.get_material_measurements(hana_conn, matnr)
+    if measurements:
+        depth = _dimension_in_mm(measurements["length"], measurements["dimension_unit"])
+        width = _dimension_in_mm(measurements["width"], measurements["dimension_unit"])
+        height = _dimension_in_mm(measurements["height"], measurements["dimension_unit"])
+        gross_weight = _weight_in_grams(measurements["gross_weight"], measurements["weight_unit"])
+        net_weight = _weight_in_grams(measurements["net_weight"], measurements["weight_unit"])
+        if any(v is not None for v in (depth, width, height, gross_weight, net_weight)):
+            modules.append(
+                gs1_exporter.build_trade_item_measurements_module_element(
+                    depth=depth, width=width, height=height,
+                    gross_weight=gross_weight, net_weight=net_weight,
+                    # Single-unit lighting products, no PIM/SAP source for this yet -
+                    # see pipeline.py's docstring / session notes for the reasoning.
+                    net_content=1,
+                )
+            )
+        else:
+            logger.info("GS1 EXPORT | matnr=%s: keine SAP-Masse/Gewichte vorhanden", matnr)
+
+    sap_descriptions = sap_database.get_material_descriptions(hana_conn, matnr)
+    descriptions_by_language: dict[str, str] = {}
+    for spras, gs1_code in sap_language_config.items():
+        text = sap_descriptions.get(spras)
+        if text:
+            descriptions_by_language[gs1_code] = text
+    if descriptions_by_language:
+        modules.append(
+            gs1_exporter.build_trade_item_description_module_element(
+                descriptions_by_language=descriptions_by_language,
+                # MAKTX reused as a placeholder for functionalName too - not a real
+                # "product function" text (see e.g. "WALL LIGHT" in the GS1
+                # reference export), kept until a better source is identified.
+                functional_names_by_language=descriptions_by_language,
+                brand_name="EGLO",
+            )
+        )
+    else:
+        logger.info("GS1 EXPORT | matnr=%s: keine SAP-Beschreibungstexte vorhanden", matnr)
+
+    if werks:
+        origin = sap_database.get_material_origin(hana_conn, matnr, werks)
+        country_code = country_code_config.get((origin or {}).get("country_of_origin", "")) if origin else None
+        if country_code:
+            customs_tariff = (origin.get("customs_tariff_number") or "").strip()
+            modules.append(
+                gs1_exporter.build_place_of_item_activity_module_element(
+                    country_of_origin_code=country_code,
+                    # First 8 digits = the base CN/HS commodity code; SAP's STAWN can
+                    # carry extra national digits beyond that - verified against the
+                    # real GS1 reference export for matnr 43706 (STAWN "9405199090" ->
+                    # importClassificationValue "94051990").
+                    import_classification_value=customs_tariff[:8] if customs_tariff else None,
+                )
+            )
+        else:
+            logger.info(
+                "GS1 EXPORT | matnr=%s werks=%s: kein Herkunftsland in MARC oder "
+                "kein Eintrag in country_code_mapping.json", matnr, werks,
+            )
+
+    return modules
+
+
 def _resolve_crosswalk_value(conn, pickid: str, pim_codes: list[str]) -> Optional[str]:
     """Check every candidate raw PIM code for an exact gs1_pim_value_crosswalk
     match (multiselect fields can have several selected codes - a match
@@ -86,7 +206,8 @@ def _resolve_crosswalk_value(conn, pickid: str, pim_codes: list[str]) -> Optiona
 
 
 def export_batch(
-    matnrs: list[str], lang_codes: list[str], vkorg: str = "", exported_by: Optional[str] = None
+    matnrs: list[str], lang_codes: list[str], vkorg: str = "", exported_by: Optional[str] = None,
+    werks: str = "",
 ) -> tuple[bytes, list[str], list[dict]]:
     """Build a combined GS1 XML document for *matnrs*.
 
@@ -97,6 +218,10 @@ def export_batch(
     upsert_export_history() entry (matnr + PIM's "updated" timestamp at this
     moment) - see get_changed_articles() for how that's used later to flag
     articles whose PIM data has changed since their last export.
+
+    werks is used to pick the right plant-specific country-of-origin row
+    from SAP MARC (see _build_sap_extension_modules()) - the same form field
+    already used for ETIM.
     """
     language_config = _load_json_config(_LANGUAGE_CONFIG_PATH)
     languages = [(code, language_config[code]) for code in lang_codes if code in language_config]
@@ -107,9 +232,22 @@ def export_batch(
     vkorg_vat_config = _load_json_config(_VKORG_VAT_CONFIG_PATH)
     vat_info = vkorg_vat_config.get(vkorg.strip())
 
+    sap_language_config = _load_json_config(_SAP_LANGUAGE_CONFIG_PATH)
+    country_code_config = _load_json_config(_COUNTRY_CODE_CONFIG_PATH)
+
     unique_matnrs = list(dict.fromkeys(m.strip() for m in matnrs if m.strip()))
     warnings: list[str] = []
     notifications = []
+
+    try:
+        hana_conn = sap_database.get_connection()
+    except Exception as exc:
+        hana_conn = None
+        logger.error("GS1 EXPORT | SAP-HANA-Verbindung fehlgeschlagen: %s", exc)
+        warnings.append(
+            "SAP-HANA-Verbindung fehlgeschlagen – Masse/Gewicht, Beschreibungstexte und "
+            "Herkunftsland werden im XML ausgelassen."
+        )
 
     if vkorg.strip() and not target_market_country_code:
         warnings.append(
@@ -212,24 +350,23 @@ def export_batch(
                     # B2C_Filter_Function); a crosswalk rule can be "true if ANY
                     # of these codes is selected", so every code needs an exact-
                     # match check before falling back to the wildcard once.
+                    # An entirely unset PIM field (pim_codes == []) still goes
+                    # through _resolve_crosswalk_value() - it falls straight
+                    # through to the wildcard, same as "no exact match" - so a
+                    # Pick with a wildcard default (e.g. 4.290: "* -> FALSE")
+                    # gets that default even when the source field was never
+                    # filled in, instead of being silently skipped.
                     pim_codes = pim_reader.get_pim_raw_codes(product, pimfeld)
-                    if not pim_codes:
-                        logger.info(
-                            "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s: kein PIM-Rohcode, "
-                            "Property wird ausgelassen",
-                            matnr, pickid, pimfeld,
-                        )
-                        continue
-
                     if pickid in _FSC_SUBSTRING_PICKS:
                         code_value = "TRUE" if any("FSC" in c.upper() for c in pim_codes) else "FALSE"
                     else:
                         code_value = _resolve_crosswalk_value(conn, pickid, pim_codes)
                     if not code_value:
                         logger.info(
-                            "GS1 EXPORT | matnr=%s pickid=%s pim_codes=%s: kein Crosswalk-Eintrag "
-                            "in gs1_pim_value_crosswalk, Property wird ausgelassen",
-                            matnr, pickid, pim_codes,
+                            "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s pim_codes=%s: kein "
+                            "Crosswalk-Eintrag (auch keine Wildcard) in gs1_pim_value_crosswalk, "
+                            "Property wird ausgelassen",
+                            matnr, pickid, pimfeld, pim_codes,
                         )
                         continue
                     properties.append(gs1_exporter.build_code_property_element(pickid, code_value))
@@ -318,6 +455,16 @@ def export_batch(
                     matnr,
                 )
 
+            extension_modules.extend(
+                _build_sap_extension_modules(
+                    hana_conn, matnr, werks.strip(), languages, sap_language_config, country_code_config,
+                )
+            )
+            # Fixed-value modules (GS1 errors G1013/G1004) - no per-article source
+            # exists for either yet, see the builder functions' docstrings.
+            extension_modules.append(gs1_exporter.build_variable_trade_item_information_module_element(False))
+            extension_modules.append(gs1_exporter.build_delivery_purchasing_information_module_element())
+
             trade_item = gs1_exporter.build_trade_item_element(
                 matnr=matnr,
                 gtin=gtin,
@@ -328,12 +475,16 @@ def export_batch(
                 target_market_country_code=target_market_country_code,
                 classification_system_code=GS1_ADDITIONAL_CLASSIFICATION_SYSTEM_CODE,
                 extension_modules=extension_modules,
+                contact_name=GS1_SUPPORT_CONTACT_NAME,
+                contact_email=GS1_SUPPORT_CONTACT_EMAIL,
             )
             catalogue_item = gs1_exporter.build_catalogue_item_element(trade_item)
             notifications.append(gs1_exporter.build_notification_element(catalogue_item, sender_gln=GS1_SENDER_GLN))
             database.upsert_export_history(conn, matnr, brick_id, pim_updated_at, exported_by)
     finally:
         conn.close()
+        if hana_conn is not None:
+            hana_conn.close()
 
     if not GS1_SENDER_GLN:
         warnings.append("GS1_SENDER_GLN ist nicht konfiguriert – Sender/BrandOwner-GLN fehlt im XML.")
@@ -360,5 +511,50 @@ def get_changed_articles() -> list[dict]:
 
     try:
         return database.get_changed_articles(conn)
+    finally:
+        conn.close()
+
+
+def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str], xml_bytes: bytes) -> None:
+    """Archive a generated GS1 XML file so exported_by can find/re-download it
+    later, see get_export_file()/list_export_files(). Swallows DB-connection
+    failures (logs only) rather than raising - saving an already-successful
+    export/download must never fail the request."""
+    try:
+        conn = database.get_connection()
+    except Exception as exc:
+        logger.error("GS1 EXPORT | Datei konnte nicht archiviert werden (Verbindung): %s", exc)
+        return
+
+    try:
+        database.save_export_file(conn, filename, exported_by, matnrs, xml_bytes)
+    finally:
+        conn.close()
+
+
+def list_export_files(exported_by: str) -> list[dict]:
+    """Files previously generated by exported_by, newest first. Raises
+    PipelineError on hard failures (e.g. DB unreachable)."""
+    try:
+        conn = database.get_connection()
+    except Exception as exc:
+        raise PipelineError(f"Datenbankverbindung fehlgeschlagen: {exc}") from exc
+
+    try:
+        return database.list_export_files(conn, exported_by)
+    finally:
+        conn.close()
+
+
+def get_export_file(file_id: int, exported_by: str) -> Optional[dict]:
+    """A single stored export file, scoped to exported_by. Raises
+    PipelineError on hard failures (e.g. DB unreachable)."""
+    try:
+        conn = database.get_connection()
+    except Exception as exc:
+        raise PipelineError(f"Datenbankverbindung fehlgeschlagen: {exc}") from exc
+
+    try:
+        return database.get_export_file(conn, file_id, exported_by)
     finally:
         conn.close()

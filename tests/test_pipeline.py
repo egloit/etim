@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
-from gs1_export import database, pipeline, validator
+from gs1_export import database, pipeline, sap_database, validator
 from gs1_export.gs1_exporter import NS_CIN
 
 FIXTURE = Path(__file__).with_name("fixtures") / "sample_product.json"
@@ -29,6 +29,19 @@ def _stub_export_history(monkeypatch):
     override this with a recording stub instead, see below."""
     monkeypatch.setattr(database, "get_product_updated_at", lambda conn, matnr: None)
     monkeypatch.setattr(database, "upsert_export_history", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _stub_sap_connection(monkeypatch):
+    """Most pipeline tests aren't about the SAP-sourced extension modules -
+    simulate "HANA unreachable" by default (export_batch() already handles
+    this gracefully, see its warnings.append) so tests don't need a real
+    HANA connection. Tests that actually cover the SAP modules override this
+    with a fake connection instead, see below."""
+    def boom():
+        raise OSError("HANA connection refused")
+
+    monkeypatch.setattr(sap_database, "get_connection", boom)
 
 
 def _trade_items(xml_bytes):
@@ -101,9 +114,15 @@ def test_export_batch_builds_trade_item_for_known_matnr(monkeypatch, product):
     # No entry for VKORG 0030 in vkorg_country_mapping.json yet -> warning, no targetMarket element.
     assert any("0030" in w for w in warnings)
     assert items[0].find("targetMarket") is None
-    # Same for vkorg_vat_mapping.json -> warning, no tradeItemInformation/extension.
+    # Same for vkorg_vat_mapping.json -> warning, no dutyFeeTaxInformationModule
+    # (tradeItemInformation/extension still exists though - variableTradeItemInformation/
+    # deliveryPurchasingInformation are always added, fixed values, no config needed).
     assert any("dutyFeeTaxInformationModule" in w for w in warnings)
-    assert items[0].find("tradeItemInformation") is None
+    assert items[0].find("tradeItemInformation/extension/{urn:gs1:gdsn:duty_fee_tax_information:xsd:3}"
+                          "dutyFeeTaxInformationModule") is None
+    assert items[0].find("tradeItemInformation/extension/{urn:gs1:gdsn:variable_trade_item_information:xsd:3}"
+                          "variableTradeItemInformationModule/variableTradeItemInformation/"
+                          "isTradeItemAVariableUnit").text == "false"
 
 
 def test_export_batch_builds_duty_fee_tax_module_when_vkorg_configured(monkeypatch, product, tmp_path):
@@ -333,6 +352,54 @@ def test_export_batch_builds_property_code_4_226_via_fsc_substring_not_crosswalk
     assert props[0].find("propertyCode").text == expected
 
 
+def test_export_batch_property_code_uses_wildcard_when_pim_field_entirely_unset(monkeypatch, product):
+    """A PIM field that was never populated for this article (e.g. ZZDIMMR
+    unset) should still get the Pick's wildcard default (e.g. "* -> FALSE"),
+    not be silently skipped - matches the same "no exact match -> wildcard"
+    rule already used when a raw code exists but doesn't match anything."""
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.290", "pimfeld": "ZZDIMMR_DOES_NOT_EXIST"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyCode")
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_exact", lambda conn, pick_id, pim_code: None)
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_wildcard", lambda conn, pick_id: "FALSE")
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    items = _trade_items(xml_bytes)
+    props = items[0].findall(
+        "gdsnTradeItemClassification/additionalTradeItemClassification"
+        "/additionalTradeItemClassificationValue/additionalTradeItemClassificationProperty"
+    )
+    assert len(props) == 1
+    assert props[0].find("propertyCode").text == "FALSE"
+
+
+def test_export_batch_property_code_still_skips_when_unset_and_no_wildcard(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.290", "pimfeld": "ZZDIMMR_DOES_NOT_EXIST"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyCode")
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_exact", lambda conn, pick_id, pim_code: None)
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_wildcard", lambda conn, pick_id: None)
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    items = _trade_items(xml_bytes)
+    assert items[0].findall(
+        "gdsnTradeItemClassification/additionalTradeItemClassification"
+        "/additionalTradeItemClassificationValue/additionalTradeItemClassificationProperty"
+    ) == []
+
+
 def test_export_batch_property_code_checks_all_multiselect_codes(monkeypatch, product):
     """Multiselect fields can have several selected codes; the crosswalk must be
     checked against ALL of them (not just the first) before falling back to the
@@ -556,3 +623,191 @@ def test_get_changed_articles_raises_pipeline_error_on_connection_failure(monkey
 
     with pytest.raises(pipeline.PipelineError):
         pipeline.get_changed_articles()
+
+
+def test_save_export_file_delegates_to_database(monkeypatch):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    calls = []
+    monkeypatch.setattr(database, "save_export_file", lambda conn, *args: calls.append(args))
+
+    pipeline.save_export_file("gs1_export_20260828.xml", "user@eglo.com", ["43706"], b"<xml/>")
+
+    assert calls == [("gs1_export_20260828.xml", "user@eglo.com", ["43706"], b"<xml/>")]
+
+
+def test_save_export_file_swallows_connection_failure(monkeypatch):
+    def boom():
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(database, "get_connection", boom)
+
+    # Must not raise - archiving must never break an otherwise-successful export/download.
+    pipeline.save_export_file("gs1_export_20260828.xml", "user@eglo.com", ["43706"], b"<xml/>")
+
+
+def test_list_export_files_delegates_to_database(monkeypatch):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "list_export_files", lambda conn, exported_by: [{"id": 7}])
+
+    assert pipeline.list_export_files("user@eglo.com") == [{"id": 7}]
+
+
+def test_list_export_files_raises_pipeline_error_on_connection_failure(monkeypatch):
+    def boom():
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(database, "get_connection", boom)
+
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.list_export_files("user@eglo.com")
+
+
+def test_get_export_file_delegates_to_database(monkeypatch):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(
+        database, "get_export_file",
+        lambda conn, file_id, exported_by: {"filename": "x.xml", "xml_content": b"<xml/>"},
+    )
+
+    assert pipeline.get_export_file(7, "user@eglo.com") == {"filename": "x.xml", "xml_content": b"<xml/>"}
+
+
+def test_get_export_file_raises_pipeline_error_on_connection_failure(monkeypatch):
+    def boom():
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(database, "get_connection", boom)
+
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.get_export_file(7, "user@eglo.com")
+
+
+# --- SAP-sourced extension modules (weight/dimensions, description, origin) ---
+
+def test_weight_in_grams_converts_kg():
+    assert pipeline._weight_in_grams(0.595, "KG") == 595
+
+
+def test_weight_in_grams_passes_through_grams():
+    assert pipeline._weight_in_grams(595, "G") == 595
+
+
+def test_weight_in_grams_none_for_zero_or_unknown_unit():
+    assert pipeline._weight_in_grams(0, "KG") is None
+    assert pipeline._weight_in_grams(1, "LB") is None
+    assert pipeline._weight_in_grams(None, "KG") is None
+
+
+def test_dimension_in_mm_converts_cm():
+    assert pipeline._dimension_in_mm(18.5, "CM") == 185
+
+
+def test_dimension_in_mm_none_for_zero_or_unknown_unit():
+    assert pipeline._dimension_in_mm(0, "MM") is None
+    assert pipeline._dimension_in_mm(5, "") is None
+
+
+class FakeHanaConnection:
+    def close(self):
+        pass
+
+
+def test_build_sap_extension_modules_builds_all_three(monkeypatch):
+    monkeypatch.setattr(
+        sap_database, "get_material_measurements",
+        lambda conn, matnr: {
+            "gross_weight": 0.665, "net_weight": 0.59, "weight_unit": "KG",
+            "length": 18.5, "width": 18.5, "height": 21.5, "dimension_unit": "CM",
+            "volume": 0, "volume_unit": "",
+        },
+    )
+    monkeypatch.setattr(
+        sap_database, "get_material_descriptions",
+        lambda conn, matnr: {"E": "WL/1 white/oak-optic TOWNSHEND", "N": "WL/1 WEISS/EICHE-OPTIK TOWNSHEND"},
+    )
+    monkeypatch.setattr(
+        sap_database, "get_material_origin",
+        lambda conn, matnr, werks: {"country_of_origin": "CN", "customs_tariff_number": "9405199090"},
+    )
+
+    modules = pipeline._build_sap_extension_modules(
+        FakeHanaConnection(), "43706", "0090",
+        [("eng", {"gs1_code": "en"}), ("nl", {"gs1_code": "nl"})],
+        sap_language_config={"E": "en", "N": "nl", "F": "fr"},
+        country_code_config={"CN": "156", "IN": "356"},
+    )
+
+    assert len(modules) == 3
+    localnames = [etree.QName(m).localname for m in modules]
+    assert localnames == ["tradeItemMeasurementsModule", "tradeItemDescriptionModule", "placeOfItemActivityModule"]
+    measurements = modules[0].find("tradeItemMeasurements")
+    assert measurements.find("depth").text == "185"
+    assert measurements.find("tradeItemWeight/grossWeight").text == "665"
+    descriptions = modules[1].find("tradeItemDescriptionInformation")
+    assert {d.get("languageCode") for d in descriptions.findall("descriptionShort")} == {"en", "nl"}
+    assert modules[2].find("placeOfProductActivity/countryOfOrigin/countryCode").text == "156"
+    assert modules[2].find("importClassification/importClassificationValue").text == "94051990"
+
+
+def test_build_sap_extension_modules_returns_empty_list_when_hana_unreachable():
+    modules = pipeline._build_sap_extension_modules(
+        None, "43706", "0090", [], sap_language_config={}, country_code_config={},
+    )
+    assert modules == []
+
+
+def test_build_sap_extension_modules_skips_origin_without_werks(monkeypatch):
+    monkeypatch.setattr(sap_database, "get_material_measurements", lambda conn, matnr: None)
+    monkeypatch.setattr(sap_database, "get_material_descriptions", lambda conn, matnr: {})
+    origin_calls = []
+    monkeypatch.setattr(
+        sap_database, "get_material_origin",
+        lambda conn, matnr, werks: origin_calls.append((matnr, werks)),
+    )
+
+    modules = pipeline._build_sap_extension_modules(
+        FakeHanaConnection(), "43706", "", [], sap_language_config={}, country_code_config={},
+    )
+
+    assert modules == []
+    assert origin_calls == []
+
+
+def test_export_batch_includes_sap_modules_when_hana_available(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.020", "pimfeld": "ZZSER"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: None)
+    monkeypatch.setattr(sap_database, "get_connection", lambda: FakeHanaConnection())
+    monkeypatch.setattr(
+        sap_database, "get_material_measurements",
+        lambda conn, matnr: {
+            "gross_weight": 0.595, "net_weight": None, "weight_unit": "KG",
+            "length": None, "width": None, "height": None, "dimension_unit": "",
+            "volume": None, "volume_unit": "",
+        },
+    )
+    monkeypatch.setattr(sap_database, "get_material_descriptions", lambda conn, matnr: {})
+    monkeypatch.setattr(sap_database, "get_material_origin", lambda conn, matnr, werks: None)
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"], werks="0090")
+
+    item = _trade_items(xml_bytes)[0]
+    assert item.find("tradeItemInformation/extension/{urn:gs1:gdsn:trade_item_measurements:xsd:3}"
+                      "tradeItemMeasurementsModule/tradeItemMeasurements/tradeItemWeight/grossWeight").text == "595"
+
+
+def test_export_batch_warns_when_hana_connection_fails(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(database, "get_active_mappings", lambda conn, brick_id: [])
+    # _stub_sap_connection (autouse) already makes sap_database.get_connection raise.
+
+    _, warnings, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    assert any("SAP-HANA-Verbindung" in w for w in warnings)

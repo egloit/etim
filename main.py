@@ -16,7 +16,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from auth import TENANT_ID, exchange_code, get_auth_url, REDIRECT_URI
-from gs1_export.pipeline import PipelineError, export_batch, get_changed_articles
+from gs1_export.pipeline import (
+    PipelineError,
+    export_batch,
+    get_changed_articles,
+    get_export_file,
+    list_export_files,
+    save_export_file,
+)
 from json_builder import build_json
 from parser import parse_file
 from sender import send_payload
@@ -194,6 +201,40 @@ async def gs1_changed_articles(request: Request):
         logger.error("GS1 CHANGED-ARTICLES ERROR | %s", exc)
         return JSONResponse({"articles": [], "error": str(exc)}, status_code=502)
     return JSONResponse({"articles": articles})
+
+
+@app.get("/gs1/files")
+async def gs1_files(request: Request):
+    """Previously generated GS1 XML files for the logged-in user, newest
+    first - lets the Vertrieb re-download a file without regenerating it."""
+    user_email = request.session.get("user", {}).get("email")
+    if "gs1" not in request.session.get("user", {}).get("roles", []) or not user_email:
+        return JSONResponse({"files": []})
+    try:
+        files = list_export_files(user_email)
+    except PipelineError as exc:
+        logger.error("GS1 FILES ERROR | %s", exc)
+        return JSONResponse({"files": [], "error": str(exc)}, status_code=502)
+    return JSONResponse({"files": files})
+
+
+@app.get("/gs1/files/{file_id}/download")
+async def gs1_file_download(request: Request, file_id: int):
+    user_email = request.session.get("user", {}).get("email")
+    if "gs1" not in request.session.get("user", {}).get("roles", []) or not user_email:
+        return JSONResponse({"success": False, "errors": [{"field": "GS1-Datei", "message": "Kein Zugriff.", "row": None}]}, status_code=403)
+    try:
+        file = get_export_file(file_id, user_email)
+    except PipelineError as exc:
+        logger.error("GS1 FILE DOWNLOAD ERROR | %s", exc)
+        return JSONResponse({"success": False, "errors": [{"field": "GS1-Datei", "message": str(exc), "row": None}]}, status_code=502)
+    if file is None:
+        return JSONResponse({"success": False, "errors": [{"field": "GS1-Datei", "message": "Datei nicht gefunden.", "row": None}]}, status_code=404)
+    return Response(
+        content=file["xml_content"],
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{file["filename"]}"'},
+    )
 
 
 @app.post("/validate")
@@ -401,7 +442,9 @@ async def submit_endpoint(
         matnrs = [r.get("Materialnummer", "").strip() for r in rows if r.get("Materialnummer", "").strip()]
         exported_by = request.session.get("user", {}).get("email") or None
         try:
-            xml_bytes, export_warnings, validation_errors = export_batch(matnrs, lang_list, vkorg, exported_by)
+            xml_bytes, export_warnings, validation_errors = export_batch(
+                matnrs, lang_list, vkorg, exported_by, werks
+            )
         except PipelineError as exc:
             logger.error("GS1 EXPORT ERROR | %s", exc)
             return JSONResponse(
@@ -420,14 +463,19 @@ async def submit_endpoint(
         )
 
         filename = f"gs1_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml"
+        save_export_file(filename, exported_by, matnrs, xml_bytes)
         return Response(
             content=xml_bytes,
             media_type="application/xml",
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
                 "X-Article-Count": str(len(matnrs)),
-                "X-Export-Warnings": json.dumps(all_warnings, ensure_ascii=False),
-                "X-Validation-Errors": json.dumps(validation_errors, ensure_ascii=False),
+                # ensure_ascii=True (default) here on purpose: HTTP header values must be
+                # latin-1, and warning text contains non-latin-1 characters (e.g. "–").
+                # \uXXXX-escaped JSON stays valid and decodes back to the real text via
+                # JSON.parse() in the browser.
+                "X-Export-Warnings": json.dumps(all_warnings),
+                "X-Validation-Errors": json.dumps(validation_errors),
             },
         )
 

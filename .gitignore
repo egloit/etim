@@ -6,3 +6,11 @@ SSO_Azure.txt
 __pycache__/
 .pytest_cache/
 verify_xsd_output.xml
+zzghmat_4012_crosswalk_insert.sql
+zzcasecolour_4015_mapping_draft.txt
+zzghfar_4015_crosswalk_insert.sql
+zzschaa_4431_fix.sql
+zzfas051_4158_fix.sql
+zzdimmr_4290_crosswalk_insert.sql
+zzremote_4418_wildcard.sql
+zzmovable_4289_fix.sql

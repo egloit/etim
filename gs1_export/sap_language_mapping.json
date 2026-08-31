@@ -1,0 +1,6 @@
+{
+  "_comment": "Bildet SAPs eigene Sprachcodes (MAKT.SPRAS) auf den GS1 languageCode ab - nur die im Formular waehlbaren Sprachen (siehe language_mapping.json). SPRAS 'N' (Niederlaendisch) ist bei vielen Artikeln nur eine Kopie des deutschen Texts, keine echte Uebersetzung - siehe sap_database.get_material_descriptions.",
+  "E": "en",
+  "N": "nl",
+  "F": "fr"
+}

@@ -84,6 +84,25 @@
       </div>
     </div>
   </div>
+
+  <div id="gs1FilesPanel" class="card section-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#gs1FilesBody">
+      <span><i class="bi bi-clock-history me-2"></i>Meine bisherigen GS1-Exporte <span id="gs1FilesCount" class="badge bg-secondary ms-1"></span></span>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="gs1FilesBody" class="collapse">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+              <tr><th>Datum</th><th>Artikel</th><th>Datei</th><th></th></tr>
+            </thead>
+            <tbody id="gs1FilesTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
   {% endif %}
 
   <form id="mainForm" novalidate autocomplete="off">
@@ -340,7 +359,7 @@
   ================================================================ -->
   <div id="resultSection" class="card section-card mb-4 d-none">
     <div class="card-header d-flex align-items-center">
-      <span class="step-badge" id="resultStepBadge">4</span>Sendeergebnis
+      <span class="step-badge" id="resultStepBadge">4</span><span id="resultHeaderLabel">Sendeergebnis</span>
     </div>
     <div class="card-body">
       <div id="resultContent"></div>
@@ -388,6 +407,7 @@ function applySubmitLabels(mode) {
   document.getElementById('submitHint').textContent = isGs1
     ? 'Die GS1-XML-Datei wird erzeugt und zum Download angeboten.'
     : 'Daten werden an den EGLO EDI-Server übertragen.';
+  document.getElementById('resultHeaderLabel').textContent = isGs1 ? 'Exportergebnis' : 'Sendeergebnis';
 }
 
 document.querySelectorAll('input[name="mode"]').forEach(el => {
@@ -711,6 +731,8 @@ async function handleGs1Download(resp) {
           : ''}
       </div>
     </div>`;
+
+  loadGs1Files();
 }
 
 /* =========================================================
@@ -963,6 +985,43 @@ async function loadGs1ChangedArticles() {
   }
 }
 loadGs1ChangedArticles();
+
+/* =========================================================
+   GS1: Übersicht bisher generierter Dateien (pro User)
+   ========================================================= */
+async function loadGs1Files() {
+  const panel = document.getElementById('gs1FilesPanel');
+  if (!panel) return; // Nutzer hat keine GS1-Rolle, Panel wurde serverseitig nicht gerendert
+
+  try {
+    const resp = await fetch('/gs1/files');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const files = data.files || [];
+    if (files.length === 0) return;
+
+    document.getElementById('gs1FilesCount').textContent = files.length;
+    document.getElementById('gs1FilesTableBody').innerHTML = files.map(f => {
+      const date = f.exported_at ? new Date(f.exported_at).toLocaleString('de-DE') : '';
+      const matnrPreview = (f.matnrs || []).slice(0, 3).map(escHtml).join(', ')
+        + ((f.matnrs || []).length > 3 ? ', …' : '');
+      return `<tr>
+        <td class="text-nowrap">${date}</td>
+        <td>${f.article_count} <span class="text-muted small">(${matnrPreview})</span></td>
+        <td><code>${escHtml(f.filename)}</code></td>
+        <td class="text-end">
+          <a href="/gs1/files/${f.id}/download" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-download me-1"></i>Download
+          </a>
+        </td>
+      </tr>`;
+    }).join('');
+    panel.classList.remove('d-none');
+  } catch (e) {
+    // Netzwerkfehler beim Hintergrund-Ladevorgang ist kein Grund, die Seite zu stören
+  }
+}
+loadGs1Files();
 </script>
 </body>
 </html>

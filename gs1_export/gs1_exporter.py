@@ -39,6 +39,7 @@ data sync.
 """
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from lxml import etree
 
@@ -118,6 +119,36 @@ LIGHTING_DEVICE_SCHEMA_LOCATION = (
     "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/LightingDeviceModule.xsd"
 )
 
+NS_TRADE_ITEM_MEASUREMENTS = "urn:gs1:gdsn:trade_item_measurements:xsd:3"
+TRADE_ITEM_MEASUREMENTS_SCHEMA_LOCATION = (
+    "urn:gs1:gdsn:trade_item_measurements:xsd:3 "
+    "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/TradeItemMeasurementsModule.xsd"
+)
+
+NS_TRADE_ITEM_DESCRIPTION = "urn:gs1:gdsn:trade_item_description:xsd:3"
+TRADE_ITEM_DESCRIPTION_SCHEMA_LOCATION = (
+    "urn:gs1:gdsn:trade_item_description:xsd:3 "
+    "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/TradeItemDescriptionModule.xsd"
+)
+
+NS_PLACE_OF_ITEM_ACTIVITY = "urn:gs1:gdsn:place_of_item_activity:xsd:3"
+PLACE_OF_ITEM_ACTIVITY_SCHEMA_LOCATION = (
+    "urn:gs1:gdsn:place_of_item_activity:xsd:3 "
+    "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/PlaceOfItemActivityModule.xsd"
+)
+
+NS_VARIABLE_TRADE_ITEM_INFORMATION = "urn:gs1:gdsn:variable_trade_item_information:xsd:3"
+VARIABLE_TRADE_ITEM_INFORMATION_SCHEMA_LOCATION = (
+    "urn:gs1:gdsn:variable_trade_item_information:xsd:3 "
+    "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/VariableTradeItemInformationModule.xsd"
+)
+
+NS_DELIVERY_PURCHASING_INFORMATION = "urn:gs1:gdsn:delivery_purchasing_information:xsd:3"
+DELIVERY_PURCHASING_INFORMATION_SCHEMA_LOCATION = (
+    "urn:gs1:gdsn:delivery_purchasing_information:xsd:3 "
+    "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/DeliveryPurchasingInformationModule.xsd"
+)
+
 
 def build_duty_fee_tax_information_module_element(
     agency_code: str, tax_type_code: str, category_code: str
@@ -154,6 +185,138 @@ def build_lighting_device_module_element(declared_power: int, unit_code: str = "
     return module
 
 
+def build_trade_item_measurements_module_element(
+    depth: Optional[int] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    dimension_unit_code: str = "MMT",
+    gross_weight: Optional[int] = None,
+    net_weight: Optional[int] = None,
+    weight_unit_code: str = "GRM",
+    net_content: Optional[int] = None,
+    net_content_unit_code: str = "H87",
+) -> etree._Element:
+    """tradeItemInformation/extension module for physical measurements -
+    element order/shape verified against a real GS1-portal reference export
+    for matnr 43706 (depth, height, width, netContent, tradeItemWeight).
+    Every value is optional and simply left out if not available - most of
+    EGLO's SAP material master data doesn't have depth/width/height filled in
+    (see pipeline.py), only weight is reliably present."""
+    module = etree.Element(
+        f"{{{NS_TRADE_ITEM_MEASUREMENTS}}}tradeItemMeasurementsModule",
+        nsmap={"trade_item_measurements": NS_TRADE_ITEM_MEASUREMENTS, "xsi": NS_XSI},
+    )
+    module.set(f"{{{NS_XSI}}}schemaLocation", TRADE_ITEM_MEASUREMENTS_SCHEMA_LOCATION)
+    measurements = etree.SubElement(module, "tradeItemMeasurements")
+
+    if depth is not None:
+        etree.SubElement(measurements, "depth", measurementUnitCode=dimension_unit_code).text = str(depth)
+    if height is not None:
+        etree.SubElement(measurements, "height", measurementUnitCode=dimension_unit_code).text = str(height)
+    if net_content is not None:
+        etree.SubElement(measurements, "netContent", measurementUnitCode=net_content_unit_code).text = str(net_content)
+    if width is not None:
+        etree.SubElement(measurements, "width", measurementUnitCode=dimension_unit_code).text = str(width)
+
+    if gross_weight is not None or net_weight is not None:
+        weight = etree.SubElement(measurements, "tradeItemWeight")
+        if gross_weight is not None:
+            etree.SubElement(weight, "grossWeight", measurementUnitCode=weight_unit_code).text = str(gross_weight)
+        if net_weight is not None:
+            etree.SubElement(weight, "netWeight", measurementUnitCode=weight_unit_code).text = str(net_weight)
+
+    return module
+
+
+def build_trade_item_description_module_element(
+    descriptions_by_language: dict[str, str],
+    functional_names_by_language: dict[str, str],
+    brand_name: str = "",
+) -> etree._Element:
+    """tradeItemInformation/extension module for description texts - element
+    order/shape verified against a real GS1-portal reference export for
+    matnr 43706 (descriptionShort, functionalName, tradeItemDescription,
+    brandNameInformation, in that order, all per-language except brandName).
+    descriptions_by_language feeds both descriptionShort and
+    tradeItemDescription (identical text in the reference export too)."""
+    module = etree.Element(
+        f"{{{NS_TRADE_ITEM_DESCRIPTION}}}tradeItemDescriptionModule",
+        nsmap={"trade_item_description": NS_TRADE_ITEM_DESCRIPTION, "xsi": NS_XSI},
+    )
+    module.set(f"{{{NS_XSI}}}schemaLocation", TRADE_ITEM_DESCRIPTION_SCHEMA_LOCATION)
+    info = etree.SubElement(module, "tradeItemDescriptionInformation")
+
+    for lang_code, text in descriptions_by_language.items():
+        etree.SubElement(info, "descriptionShort", languageCode=lang_code).text = text
+    for lang_code, text in functional_names_by_language.items():
+        etree.SubElement(info, "functionalName", languageCode=lang_code).text = text
+    for lang_code, text in descriptions_by_language.items():
+        etree.SubElement(info, "tradeItemDescription", languageCode=lang_code).text = text
+
+    if brand_name:
+        brand_info = etree.SubElement(info, "brandNameInformation")
+        etree.SubElement(brand_info, "brandName").text = brand_name
+
+    return module
+
+
+def build_place_of_item_activity_module_element(
+    country_of_origin_code: str,
+    import_classification_value: Optional[str] = None,
+) -> etree._Element:
+    """tradeItemInformation/extension module for country of origin / customs
+    classification - element order/shape verified against a real GS1-portal
+    reference export for matnr 43706 (importClassification before
+    placeOfProductActivity). country_of_origin_code is the UN M49 numeric
+    country code (e.g. "156" for China), not the ISO alpha-2 code - see
+    pipeline.py/country_code_mapping.json."""
+    module = etree.Element(
+        f"{{{NS_PLACE_OF_ITEM_ACTIVITY}}}placeOfItemActivityModule",
+        nsmap={"place_of_item_activity": NS_PLACE_OF_ITEM_ACTIVITY, "xsi": NS_XSI},
+    )
+    module.set(f"{{{NS_XSI}}}schemaLocation", PLACE_OF_ITEM_ACTIVITY_SCHEMA_LOCATION)
+
+    if import_classification_value:
+        import_classification = etree.SubElement(module, "importClassification")
+        etree.SubElement(import_classification, "importClassificationTypeCode").text = "INTRASTAT"
+        etree.SubElement(import_classification, "importClassificationValue").text = import_classification_value
+
+    place_of_activity = etree.SubElement(module, "placeOfProductActivity")
+    country_of_origin = etree.SubElement(place_of_activity, "countryOfOrigin")
+    etree.SubElement(country_of_origin, "countryCode").text = country_of_origin_code
+
+    return module
+
+
+def build_variable_trade_item_information_module_element(is_variable_unit: bool = False) -> etree._Element:
+    """tradeItemInformation/extension module for GS1 error G1013
+    (isTradeItemAVariableUnit must not be empty) - fixed 'false' for EGLO's
+    standard lighting products (not variable-measure items like fresh food),
+    not sourced from PIM/SAP since there's no per-article signal for this."""
+    module = etree.Element(
+        f"{{{NS_VARIABLE_TRADE_ITEM_INFORMATION}}}variableTradeItemInformationModule",
+        nsmap={"variable_trade_item_information": NS_VARIABLE_TRADE_ITEM_INFORMATION, "xsi": NS_XSI},
+    )
+    module.set(f"{{{NS_XSI}}}schemaLocation", VARIABLE_TRADE_ITEM_INFORMATION_SCHEMA_LOCATION)
+    info = etree.SubElement(module, "variableTradeItemInformation")
+    etree.SubElement(info, "isTradeItemAVariableUnit").text = "true" if is_variable_unit else "false"
+    return module
+
+
+def build_delivery_purchasing_information_module_element(start_availability_date_time: Optional[str] = None) -> etree._Element:
+    """tradeItemInformation/extension module for GS1 error G1004
+    (startAvailabilityDateTime must be populated) - defaults to "now" since
+    there's no real per-article source for this yet."""
+    module = etree.Element(
+        f"{{{NS_DELIVERY_PURCHASING_INFORMATION}}}deliveryPurchasingInformationModule",
+        nsmap={"delivery_purchasing_information": NS_DELIVERY_PURCHASING_INFORMATION, "xsi": NS_XSI},
+    )
+    module.set(f"{{{NS_XSI}}}schemaLocation", DELIVERY_PURCHASING_INFORMATION_SCHEMA_LOCATION)
+    info = etree.SubElement(module, "deliveryPurchasingInformation")
+    etree.SubElement(info, "startAvailabilityDateTime").text = start_availability_date_time or _now_iso()
+    return module
+
+
 def build_trade_item_element(
     matnr: str,
     gtin: str,
@@ -164,6 +327,8 @@ def build_trade_item_element(
     target_market_country_code: str = "",
     classification_system_code: str = "64",
     extension_modules: list[etree._Element] | None = None,
+    contact_name: str = "",
+    contact_email: str = "",
 ) -> etree._Element:
     trade_item = etree.Element("tradeItem")
 
@@ -212,6 +377,31 @@ def build_trade_item_element(
         target_market = etree.SubElement(trade_item, "targetMarket")
         etree.SubElement(target_market, "targetMarketCountryCode").text = target_market_country_code
 
+    # tradeItemContactInformation is a real TradeItem.xsd element (not an
+    # extension module) - GS1's own error response (500.593) named the exact
+    # required contactTypeCode value ("BZL") for consumer units, so that part
+    # is fixed. Once contactTypeCode is used, GS1 also requires contactName/
+    # contactAddress/targetMarketCommunicationChannel to be filled in (error
+    # 500.594) - contact_email is reused for both contactAddress and the
+    # communicationValue, a fixed EGLO-wide support contact, not per-article.
+    # Element order (contactTypeCode, contactAddress, contactName,
+    # targetMarketCommunicationChannel) matches TradeItemContactInformationType's
+    # sequence in TradeItem.xsd.
+    contact_info = etree.SubElement(trade_item, "tradeItemContactInformation")
+    etree.SubElement(contact_info, "contactTypeCode").text = "BZL"
+    if contact_email:
+        etree.SubElement(contact_info, "contactAddress").text = contact_email
+    if contact_name:
+        etree.SubElement(contact_info, "contactName").text = contact_name
+    if contact_email:
+        comm_channel = etree.SubElement(contact_info, "targetMarketCommunicationChannel")
+        channel = etree.SubElement(comm_channel, "communicationChannel")
+        # "EMAIL" verified against the real CommunicationChannelCode picklist
+        # (GS1 Benelux DHZTD attribute workbook) - "EM" (an earlier guess) is
+        # not a valid code, GS1 rejected it with G541.
+        etree.SubElement(channel, "communicationChannelCode").text = "EMAIL"
+        etree.SubElement(channel, "communicationValue").text = contact_email
+
     # tradeItemInformation/extension is typed permissively (xsd:any-like) in
     # CatalogueItemNotification.xsd, so extension modules can be added here
     # without fetching their own XSDs for validation.
@@ -222,8 +412,12 @@ def build_trade_item_element(
             extension.append(module_element)
 
     # tradeItemSynchronisationDates is minOccurs="1" in TradeItem.xsd.
+    # effectiveDateTime is GS1-mandatory too (error G1283) - "now" is a
+    # reasonable default since we don't have a real per-article source for it.
     sync_dates = etree.SubElement(trade_item, "tradeItemSynchronisationDates")
-    etree.SubElement(sync_dates, "lastChangeDateTime").text = _now_iso()
+    now = _now_iso()
+    etree.SubElement(sync_dates, "lastChangeDateTime").text = now
+    etree.SubElement(sync_dates, "effectiveDateTime").text = now
 
     return trade_item
 
