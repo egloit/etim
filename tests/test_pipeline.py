@@ -44,6 +44,14 @@ def _stub_sap_connection(monkeypatch):
     monkeypatch.setattr(sap_database, "get_connection", boom)
 
 
+@pytest.fixture(autouse=True)
+def _stub_marketing_text(monkeypatch):
+    """Most pipeline tests aren't about tradeItemMarketingMessage - default to
+    "no MAKTX text found" so tests don't need a cursor for it. Tests that
+    actually cover marketingInformationModule override this, see below."""
+    monkeypatch.setattr(database, "get_pim_catalog_text_value", lambda conn, matnr, attribute_code, locale: None)
+
+
 def _trade_items(xml_bytes):
     root = etree.fromstring(xml_bytes)
     return root.findall(f".//transaction/documentCommand/{{{NS_CIN}}}catalogueItemNotification/catalogueItem/tradeItem")
@@ -242,6 +250,53 @@ def test_export_batch_skips_lighting_device_module_without_pim_fas_05_1(monkeypa
     items = _trade_items(xml_bytes)
     from gs1_export.gs1_exporter import NS_LIGHTING_DEVICE
     assert items[0].find(f"tradeItemInformation/extension/{{{NS_LIGHTING_DEVICE}}}lightingDeviceModule") is None
+
+
+def test_export_batch_builds_marketing_information_module_when_maktx_present(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.020", "pimfeld": "ZZSER"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: None)
+    monkeypatch.setattr(
+        database,
+        "get_pim_catalog_text_value",
+        lambda conn, matnr, attribute_code, locale: (
+            "WL/1 E27 white/wood 'TOWNSHEND'" if locale == "en_GB" else None
+        ),
+    )
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    from gs1_export.gs1_exporter import NS_MARKETING_INFORMATION
+    items = _trade_items(xml_bytes)
+    module = items[0].find(f"tradeItemInformation/extension/{{{NS_MARKETING_INFORMATION}}}marketingInformationModule")
+    assert module is not None
+    message = module.find("marketingInformation/tradeItemMarketingMessage")
+    assert message.text == "WL/1 E27 white/wood 'TOWNSHEND'"
+    assert message.get("languageCode") == "en"
+
+
+def test_export_batch_skips_marketing_information_module_without_maktx(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.020", "pimfeld": "ZZSER"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: None)
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    items = _trade_items(xml_bytes)
+    from gs1_export.gs1_exporter import NS_MARKETING_INFORMATION
+    assert items[0].find(
+        f"tradeItemInformation/extension/{{{NS_MARKETING_INFORMATION}}}marketingInformationModule"
+    ) is None
 
 
 def test_export_batch_only_builds_propertydescription_picks(monkeypatch, product):

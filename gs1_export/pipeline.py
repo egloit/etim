@@ -460,6 +460,30 @@ def export_batch(
                     hana_conn, matnr, werks.strip(), languages, sap_language_config, country_code_config,
                 )
             )
+
+            # marketingInformationModule/tradeItemMarketingMessage - placeholder
+            # source MAKTX (SAP material short text) via the Postgres PIM-values
+            # table, confirmed by the user 2026-09-03 as a stand-in until the
+            # real marketing-copy field is identified (see
+            # gs1_exporter.build_marketing_information_module_element's
+            # docstring). Uses the same PIM-locale convention as
+            # propertyDescription (language_mapping.json), not SAP's spras.
+            marketing_texts_by_language: dict[str, str] = {}
+            for lang_code, lang_cfg in languages:
+                text = gs1_mapping.get_pim_catalog_text_value(conn, matnr, "MAKTX", lang_cfg["pim_locale"])
+                if text:
+                    marketing_texts_by_language[lang_cfg["gs1_code"]] = text
+            if marketing_texts_by_language:
+                extension_modules.append(
+                    gs1_exporter.build_marketing_information_module_element(marketing_texts_by_language)
+                )
+            else:
+                logger.info(
+                    "GS1 EXPORT | matnr=%s: kein MAKTX-Text (Postgres) gefunden, "
+                    "marketingInformationModule wird ausgelassen",
+                    matnr,
+                )
+
             # Fixed-value modules (GS1 errors G1013/G1004) - no per-article source
             # exists for either yet, see the builder functions' docstrings.
             extension_modules.append(gs1_exporter.build_variable_trade_item_information_module_element(False))

@@ -70,7 +70,10 @@ class _RecordingCursor:
         self.calls.append((query, params))
         # SET statement_timeout is a harmless utility call, never the one that
         # would actually raise UndefinedTable against a real table.
-        raises_here = "gs1_export_history" in query or "gs1_export_files" in query
+        raises_here = (
+            "gs1_export_history" in query or "gs1_export_files" in query
+            or "pim_egloakeneo_product_values_pim_catalog_text" in query
+        )
         if self._raise_on_execute and raises_here:
             raise self._raise_on_execute
 
@@ -183,3 +186,27 @@ def test_get_export_file_returns_none_when_table_missing():
     cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
     conn = _RecordingConnection(cursor)
     assert database.get_export_file(conn, 7, "user@eglo.com") is None
+
+
+def test_get_pim_catalog_text_value_unescapes_slashes():
+    cursor = _RecordingCursor(fetchone_result=("WL\\/1 E27 white\\/wood 'TOWNSHEND'",))
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_text_value(conn, "43706", "MAKTX", "en_US") == "WL/1 E27 white/wood 'TOWNSHEND'"
+
+
+def test_get_pim_catalog_text_value_treats_empty_array_marker_as_none():
+    cursor = _RecordingCursor(fetchone_result=("[]",))
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_text_value(conn, "43706", "MAKTX", "en_GB") is None
+
+
+def test_get_pim_catalog_text_value_returns_none_when_no_row():
+    cursor = _RecordingCursor(fetchone_result=None)
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_text_value(conn, "43706", "MAKTX", "en_GB") is None
+
+
+def test_get_pim_catalog_text_value_tolerates_missing_table():
+    cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_text_value(conn, "43706", "MAKTX", "en_GB") is None

@@ -190,6 +190,44 @@ def get_pim_value_crosswalk_wildcard(conn: psycopg.Connection, pick_id: str) -> 
     return get_pim_value_crosswalk_exact(conn, pick_id, _CROSSWALK_WILDCARD)
 
 
+def get_pim_catalog_text_value(
+    conn: psycopg.Connection, matnr: str, attribute_code: str, locale: str
+) -> Optional[str]:
+    """Look up a per-locale free-text PIM value from
+    public.pim_egloakeneo_product_values_pim_catalog_text (a separate table
+    from pim_egloakeneo_product's json blob - one row per matnr+attribute_code
+    +locale). Used for e.g. MAKTX (SAP material short text), the placeholder
+    source for tradeItemMarketingMessage until a real marketing-copy field is
+    confirmed (2026-09-03, see gs1_mapping notes).
+
+    Missing/untranslated values are stored as the literal string '[]' (both
+    scope and data columns), not NULL - treated as "no value" here. Present
+    values have escaped forward slashes (e.g. "WL\\/1 E27...") that get
+    unescaped before returning. Tolerant of the table not existing, same
+    pattern as the other lookups."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT data
+                FROM public.pim_egloakeneo_product_values_pim_catalog_text
+                WHERE matnr = %s AND attribute_code = %s AND locale = %s
+                LIMIT 1
+                """,
+                (matnr, attribute_code, locale),
+            )
+            row = cur.fetchone()
+            if not row or not row[0] or row[0] in ("[]", "null"):
+                return None
+            return row[0].replace("\\/", "/")
+    except psycopg.errors.UndefinedTable:
+        logger.warning(
+            "pim_egloakeneo_product_values_pim_catalog_text existiert noch nicht - "
+            "Text nicht bestimmbar."
+        )
+        return None
+
+
 def get_manual_property_value(conn: psycopg.Connection, matnr: str, pick_id: str) -> Optional[str]:
     """Look up a manually-maintained property value for a matnr+Pick from
     public.gs1_manual_property_values - used for GDSN attributes GS1 itself

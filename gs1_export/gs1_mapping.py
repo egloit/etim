@@ -29,6 +29,12 @@ def get_manual_property_value(conn: psycopg.Connection, matnr: str, pick_id: str
     return database.get_manual_property_value(conn, matnr, pick_id)
 
 
+def get_pim_catalog_text_value(
+    conn: psycopg.Connection, matnr: str, attribute_code: str, locale: str
+) -> Optional[str]:
+    return database.get_pim_catalog_text_value(conn, matnr, attribute_code, locale)
+
+
 def get_pim_value_crosswalk(conn: psycopg.Connection, pick_id: str, pim_code: str) -> Optional[str]:
     return database.get_pim_value_crosswalk(conn, pick_id, pim_code)
 

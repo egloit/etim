@@ -32,10 +32,11 @@ informationProviderOfTradeItem/brandOwner (from GS1_SENDER_GLN),
 gdsnTradeItemClassification (gpcCategoryCode = BrickId +
 additionalTradeItemClassificationProperty per active gs1_mapping row,
 propertyDescription only - see pipeline.py for why), targetMarket and
-tradeItemSynchronisationDates. Other GDSN extension modules (marketing info,
-packaging, measurements, ...) are intentionally omitted - this export only
-covers the Brick/Pick classification properties, not full product master
-data sync.
+tradeItemSynchronisationDates. Several GDSN extension modules are also built
+(duty/fee/tax, lighting device, measurements, description, marketing info,
+place of activity, variable trade item, delivery/purchasing - see the
+build_*_module_element functions below and pipeline.py); packaging and a few
+others remain out of scope, not sourced from PIM/SAP yet.
 """
 import uuid
 from datetime import datetime, timezone
@@ -149,6 +150,12 @@ DELIVERY_PURCHASING_INFORMATION_SCHEMA_LOCATION = (
     "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/DeliveryPurchasingInformationModule.xsd"
 )
 
+NS_MARKETING_INFORMATION = "urn:gs1:gdsn:marketing_information:xsd:3"
+MARKETING_INFORMATION_SCHEMA_LOCATION = (
+    "urn:gs1:gdsn:marketing_information:xsd:3 "
+    "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/MarketingInformationModule.xsd"
+)
+
 
 def build_duty_fee_tax_information_module_element(
     agency_code: str, tax_type_code: str, category_code: str
@@ -257,6 +264,31 @@ def build_trade_item_description_module_element(
         brand_info = etree.SubElement(info, "brandNameInformation")
         etree.SubElement(brand_info, "brandName").text = brand_name
 
+    return module
+
+
+def build_marketing_information_module_element(messages_by_language: dict[str, str]) -> etree._Element:
+    """tradeItemInformation/extension module for tradeItemMarketingMessage -
+    real reference export (matnr 43706) shows this as multi-sentence
+    customer-facing marketing copy, one element per languageCode, under
+    marketingInformation (which can also carry an optional specialItemCode -
+    no source for that yet, so it's never emitted here).
+
+    Current source (2026-09-03, confirmed a placeholder by the user, "kann
+    noch geändert werden"): MAKTX (SAP material short text) via
+    pim_egloakeneo_product_values_pim_catalog_text - a short internal
+    abbreviation-style text (e.g. "WL/1 E27 white/wood 'TOWNSHEND'"), not the
+    real flowing marketing description GS1 expects. Swap the pipeline.py
+    source once the correct field is confirmed; this builder itself doesn't
+    care where the text came from."""
+    module = etree.Element(
+        f"{{{NS_MARKETING_INFORMATION}}}marketingInformationModule",
+        nsmap={"marketing_information": NS_MARKETING_INFORMATION, "xsi": NS_XSI},
+    )
+    module.set(f"{{{NS_XSI}}}schemaLocation", MARKETING_INFORMATION_SCHEMA_LOCATION)
+    info = etree.SubElement(module, "marketingInformation")
+    for lang_code, text in messages_by_language.items():
+        etree.SubElement(info, "tradeItemMarketingMessage", languageCode=lang_code).text = text
     return module
 
 

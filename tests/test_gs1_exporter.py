@@ -5,6 +5,7 @@ from gs1_export.gs1_exporter import (
     NS_DELIVERY_PURCHASING_INFORMATION,
     NS_DUTY_FEE_TAX,
     NS_LIGHTING_DEVICE,
+    NS_MARKETING_INFORMATION,
     NS_PLACE_OF_ITEM_ACTIVITY,
     NS_SBDH,
     NS_TRADE_ITEM_DESCRIPTION,
@@ -18,6 +19,7 @@ from gs1_export.gs1_exporter import (
     build_duty_fee_tax_information_module_element,
     build_integer_property_element,
     build_lighting_device_module_element,
+    build_marketing_information_module_element,
     build_measurement_property_element,
     build_notification_element,
     build_place_of_item_activity_module_element,
@@ -266,6 +268,23 @@ def test_build_trade_item_description_module_element_omits_brand_when_empty():
         descriptions_by_language={"en": "Text"}, functional_names_by_language={"en": "Text"}, brand_name="",
     )
     assert module.find("tradeItemDescriptionInformation/brandNameInformation") is None
+
+
+def test_build_marketing_information_module_element():
+    module = build_marketing_information_module_element(
+        messages_by_language={"en": "The TOWNSHEND wall light is made of white metal.", "nl": "Deze wandlamp..."},
+    )
+
+    assert etree.QName(module).localname == "marketingInformationModule"
+    assert etree.QName(module).namespace == NS_MARKETING_INFORMATION
+    info = module.find("marketingInformation")
+    messages = {m.get("languageCode"): m.text for m in info.findall("tradeItemMarketingMessage")}
+    assert messages == {"en": "The TOWNSHEND wall light is made of white metal.", "nl": "Deze wandlamp..."}
+
+
+def test_build_marketing_information_module_element_empty_when_no_languages():
+    module = build_marketing_information_module_element(messages_by_language={})
+    assert module.find("marketingInformation").findall("tradeItemMarketingMessage") == []
 
 
 def test_build_place_of_item_activity_module_element_with_import_classification():
