@@ -54,6 +54,15 @@ _SUM_ALL_NUMBERS_PICKS = {"7.041"}
 # 2026-08-31: 27 real FSC_* codes not in the crosswalk).
 _FSC_SUBSTRING_PICKS = {"4.226"}
 
+# packagingInformationModule (GS1 error 500.061) - fixed value, EGLO's
+# standard packaging is a box ("BX"), same reasoning as
+# variableTradeItemInformationModule (no per-article source). Translations
+# match the real GS1-portal reference export (matnr 43706) verbatim; only
+# covers the GS1 languages this app actually emits (see language_mapping.json
+# - en/nl/fr), "BOX" as a fallback for anything else.
+_PACKAGING_TYPE_CODE = "BX"
+_PACKAGING_TYPE_DESCRIPTIONS_BY_GS1_CODE = {"en": "BOX", "fr": "BOITE", "nl": "DOOS"}
+
 GS1_SENDER_GLN = os.getenv("GS1_SENDER_GLN", "")
 GS1_SENDER_PARTY_NAME = os.getenv("GS1_SENDER_PARTY_NAME", "EGLO")
 GS1_RECEIVER_GLN = os.getenv("GS1_RECEIVER_GLN", "")
@@ -548,10 +557,18 @@ def export_batch(
                     matnr,
                 )
 
-            # Fixed-value modules (GS1 errors G1013/G1004) - no per-article source
-            # exists for either yet, see the builder functions' docstrings.
+            # Fixed-value modules (GS1 errors G1013/G1004/500.061) - no
+            # per-article source exists for any of these yet, see the builder
+            # functions' docstrings.
             extension_modules.append(gs1_exporter.build_variable_trade_item_information_module_element(False))
             extension_modules.append(gs1_exporter.build_delivery_purchasing_information_module_element())
+            packaging_descriptions = {
+                lang_cfg["gs1_code"]: _PACKAGING_TYPE_DESCRIPTIONS_BY_GS1_CODE.get(lang_cfg["gs1_code"], "BOX")
+                for _, lang_cfg in languages
+            }
+            extension_modules.append(
+                gs1_exporter.build_packaging_information_module_element(_PACKAGING_TYPE_CODE, packaging_descriptions)
+            )
 
             trade_item = gs1_exporter.build_trade_item_element(
                 matnr=matnr,

@@ -34,10 +34,9 @@ additionalTradeItemClassificationProperty per active gs1_mapping row,
 propertyDescription only - see pipeline.py for why), targetMarket and
 tradeItemSynchronisationDates. Several GDSN extension modules are also built
 (duty/fee/tax, lighting device, measurements, description, marketing info,
-place of activity, referenced file (images), variable trade item,
+place of activity, referenced file (images), packaging, variable trade item,
 delivery/purchasing - see the build_*_module_element functions below and
-pipeline.py); packaging and a few others remain out of scope, not sourced
-from PIM/SAP yet.
+pipeline.py); a few others remain out of scope, not sourced from PIM/SAP yet.
 """
 import uuid
 from datetime import datetime, timezone
@@ -161,6 +160,12 @@ NS_REFERENCED_FILE_DETAIL_INFORMATION = "urn:gs1:gdsn:referenced_file_detail_inf
 REFERENCED_FILE_DETAIL_INFORMATION_SCHEMA_LOCATION = (
     "urn:gs1:gdsn:referenced_file_detail_information:xsd:3 "
     "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/ReferencedFileDetailInformationModule.xsd"
+)
+
+NS_PACKAGING_INFORMATION = "urn:gs1:gdsn:packaging_information:xsd:3"
+PACKAGING_INFORMATION_SCHEMA_LOCATION = (
+    "urn:gs1:gdsn:packaging_information:xsd:3 "
+    "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/PackagingInformationModule.xsd"
 )
 
 
@@ -328,6 +333,27 @@ def build_referenced_file_detail_information_module_element(
     if media_source_gln:
         avp_list = etree.SubElement(header, "avpList")
         etree.SubElement(avp_list, "stringAVP", attributeName="mediaSourceGln").text = media_source_gln
+    return module
+
+
+def build_packaging_information_module_element(
+    packaging_type_code: str, descriptions_by_language: dict[str, str]
+) -> etree._Element:
+    """tradeItemInformation/extension module for GS1 error 500.061
+    ("Packaging type code shall be used at least once") - fixed value ("BX"/
+    box, EGLO's standard packaging) rather than PIM/SAP-sourced, same
+    reasoning as build_variable_trade_item_information_module_element. Shape
+    verified against a real GS1-portal reference export (matnr 43706):
+    packagingTypeCode, then one packagingTypeDescription per languageCode."""
+    module = etree.Element(
+        f"{{{NS_PACKAGING_INFORMATION}}}packagingInformationModule",
+        nsmap={"packaging_information": NS_PACKAGING_INFORMATION, "xsi": NS_XSI},
+    )
+    module.set(f"{{{NS_XSI}}}schemaLocation", PACKAGING_INFORMATION_SCHEMA_LOCATION)
+    packaging = etree.SubElement(module, "packaging")
+    etree.SubElement(packaging, "packagingTypeCode").text = packaging_type_code
+    for lang_code, text in descriptions_by_language.items():
+        etree.SubElement(packaging, "packagingTypeDescription", languageCode=lang_code).text = text
     return module
 
 

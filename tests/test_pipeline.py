@@ -139,6 +139,13 @@ def test_export_batch_builds_trade_item_for_known_matnr(monkeypatch, product):
     assert items[0].find("tradeItemInformation/extension/{urn:gs1:gdsn:variable_trade_item_information:xsd:3}"
                           "variableTradeItemInformationModule/variableTradeItemInformation/"
                           "isTradeItemAVariableUnit").text == "false"
+    # packagingInformationModule (GS1 error 500.061) - fixed "BX"/box value,
+    # always added regardless of config, only for the requested languages.
+    packaging = items[0].find("tradeItemInformation/extension/{urn:gs1:gdsn:packaging_information:xsd:3}"
+                               "packagingInformationModule/packaging")
+    assert packaging.find("packagingTypeCode").text == "BX"
+    packaging_descriptions = {d.get("languageCode"): d.text for d in packaging.findall("packagingTypeDescription")}
+    assert packaging_descriptions == {"en": "BOX", "fr": "BOITE"}
 
 
 def test_export_batch_builds_duty_fee_tax_module_when_vkorg_configured(monkeypatch, product, tmp_path):

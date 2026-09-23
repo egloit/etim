@@ -6,6 +6,7 @@ from gs1_export.gs1_exporter import (
     NS_DUTY_FEE_TAX,
     NS_LIGHTING_DEVICE,
     NS_MARKETING_INFORMATION,
+    NS_PACKAGING_INFORMATION,
     NS_PLACE_OF_ITEM_ACTIVITY,
     NS_REFERENCED_FILE_DETAIL_INFORMATION,
     NS_SBDH,
@@ -23,6 +24,7 @@ from gs1_export.gs1_exporter import (
     build_marketing_information_module_element,
     build_measurement_property_element,
     build_notification_element,
+    build_packaging_information_module_element,
     build_place_of_item_activity_module_element,
     build_referenced_file_detail_information_module_element,
     build_string_property_element,
@@ -317,6 +319,19 @@ def test_build_referenced_file_detail_information_module_element_no_gln_omits_av
     )
     assert module.find("referencedFileHeader/isPrimaryFile").text == "FALSE"
     assert module.find("referencedFileHeader/avpList") is None
+
+
+def test_build_packaging_information_module_element():
+    module = build_packaging_information_module_element(
+        "BX", {"en": "BOX", "fr": "BOITE", "nl": "DOOS"},
+    )
+
+    assert etree.QName(module).localname == "packagingInformationModule"
+    assert etree.QName(module).namespace == NS_PACKAGING_INFORMATION
+    packaging = module.find("packaging")
+    assert packaging.find("packagingTypeCode").text == "BX"
+    descriptions = {d.get("languageCode"): d.text for d in packaging.findall("packagingTypeDescription")}
+    assert descriptions == {"en": "BOX", "fr": "BOITE", "nl": "DOOS"}
 
 
 def test_build_place_of_item_activity_module_element_with_import_classification():
