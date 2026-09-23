@@ -321,6 +321,7 @@ async def json_preview_endpoint(
     werks: str = Form(default=""),
     email: str = Form(default=""),
     mode: str = Form(default="etim"),
+    preise: str = Form(default="none"),
     file: UploadFile = File(...),
 ):
     """Validate + build JSON payload – without sending it."""
@@ -355,7 +356,7 @@ async def json_preview_endpoint(
             }
         )
 
-    payload = build_json(rows, lang_list, kunnr, vkorg, spart, vtweg, werks, email, mode)
+    payload = build_json(rows, lang_list, kunnr, vkorg, spart, vtweg, werks, email, mode, preise)
     return JSONResponse(
         {
             "success":   True,
@@ -378,6 +379,7 @@ async def submit_endpoint(
     werks: str = Form(default=""),
     email: str = Form(default=""),
     mode: str = Form(default="etim"),
+    preise: str = Form(default="none"),
     file: UploadFile = File(...),
 ):
     lang_list = languages or []
@@ -480,10 +482,10 @@ async def submit_endpoint(
         )
 
     # Build JSON payload
-    payload = build_json(rows, lang_list, kunnr, vkorg, spart, vtweg, werks, email, mode)
+    payload = build_json(rows, lang_list, kunnr, vkorg, spart, vtweg, werks, email, mode, preise)
 
     logger.info(
-        "SUBMIT | mode=%s | file=%s | rows=%d | kunnr=%s | vkorg=%s | spart=%s | vtweg=%s | werks=%s | langs=%s | warnings=%d",
+        "SUBMIT | mode=%s | file=%s | rows=%d | kunnr=%s | vkorg=%s | spart=%s | vtweg=%s | werks=%s | langs=%s | preise=%s | warnings=%d",
         mode,
         file.filename,
         len(rows),
@@ -493,6 +495,7 @@ async def submit_endpoint(
         vtweg.strip(),
         werks.strip(),
         ",".join(lang_list),
+        preise,
         len(warnings),
     )
 

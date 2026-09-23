@@ -233,7 +233,7 @@
           </div>
         </div>
 
-        <!-- E-Mail -->
+        <!-- E-Mail + Preise -->
         <div class="row g-3">
           <div class="col-sm-8 col-lg-6">
             <label for="email" class="form-label fw-semibold">
@@ -243,6 +243,15 @@
                    placeholder="empfaenger@beispiel.de"/>
             <div class="invalid-feedback" id="emailError">Bitte eine gültige E-Mail-Adresse eingeben.</div>
             <div class="field-hint">An diese Adresse wird das Ergebnis gesendet.</div>
+          </div>
+          <div class="col-sm-4 col-lg-3 mode-field" data-modes="etim">
+            <label for="preise" class="form-label fw-semibold">Preise</label>
+            <select class="form-select" id="preise" name="preise">
+              <option value="none" selected>Keine</option>
+              <option value="csv">CSV</option>
+              <option value="sap">SAP</option>
+            </select>
+            <div class="field-hint">Steuert die Preisübermittlung an den EDI-Server.</div>
           </div>
         </div>
 
@@ -393,6 +402,10 @@ function applyMode(mode) {
     if (!visible) {
       opt.querySelector('input').checked = false;
     }
+  });
+  document.querySelectorAll('.mode-field').forEach(el => {
+    const modes = el.dataset.modes.split(' ');
+    el.style.display = modes.includes(mode) ? '' : 'none';
   });
   applySubmitLabels(mode);
   invalidateValidation();
