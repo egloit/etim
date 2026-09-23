@@ -34,9 +34,10 @@ additionalTradeItemClassificationProperty per active gs1_mapping row,
 propertyDescription only - see pipeline.py for why), targetMarket and
 tradeItemSynchronisationDates. Several GDSN extension modules are also built
 (duty/fee/tax, lighting device, measurements, description, marketing info,
-place of activity, variable trade item, delivery/purchasing - see the
-build_*_module_element functions below and pipeline.py); packaging and a few
-others remain out of scope, not sourced from PIM/SAP yet.
+place of activity, referenced file (images), variable trade item,
+delivery/purchasing - see the build_*_module_element functions below and
+pipeline.py); packaging and a few others remain out of scope, not sourced
+from PIM/SAP yet.
 """
 import uuid
 from datetime import datetime, timezone
@@ -154,6 +155,12 @@ NS_MARKETING_INFORMATION = "urn:gs1:gdsn:marketing_information:xsd:3"
 MARKETING_INFORMATION_SCHEMA_LOCATION = (
     "urn:gs1:gdsn:marketing_information:xsd:3 "
     "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/MarketingInformationModule.xsd"
+)
+
+NS_REFERENCED_FILE_DETAIL_INFORMATION = "urn:gs1:gdsn:referenced_file_detail_information:xsd:3"
+REFERENCED_FILE_DETAIL_INFORMATION_SCHEMA_LOCATION = (
+    "urn:gs1:gdsn:referenced_file_detail_information:xsd:3 "
+    "http://www.gs1globalregistry.net/3.1/schemas/gs1/gdsn/ReferencedFileDetailInformationModule.xsd"
 )
 
 
@@ -274,13 +281,11 @@ def build_marketing_information_module_element(messages_by_language: dict[str, s
     marketingInformation (which can also carry an optional specialItemCode -
     no source for that yet, so it's never emitted here).
 
-    Current source (2026-09-03, confirmed a placeholder by the user, "kann
-    noch geändert werden"): MAKTX (SAP material short text) via
-    pim_egloakeneo_product_values_pim_catalog_text - a short internal
-    abbreviation-style text (e.g. "WL/1 E27 white/wood 'TOWNSHEND'"), not the
-    real flowing marketing description GS1 expects. Swap the pipeline.py
-    source once the correct field is confirmed; this builder itself doesn't
-    care where the text came from."""
+    Source (2026-09-23, confirmed real by the user): PIM_ARTIKELTEXT via
+    pim_egloakeneo_product_values_pim_catalog_textarea - a flowing
+    multi-sentence marketing text, unlike the earlier MAKTX (SAP material
+    short text) placeholder this replaced. This builder itself doesn't care
+    where the text came from - see pipeline.py for the lookup."""
     module = etree.Element(
         f"{{{NS_MARKETING_INFORMATION}}}marketingInformationModule",
         nsmap={"marketing_information": NS_MARKETING_INFORMATION, "xsi": NS_XSI},
@@ -289,6 +294,40 @@ def build_marketing_information_module_element(messages_by_language: dict[str, s
     info = etree.SubElement(module, "marketingInformation")
     for lang_code, text in messages_by_language.items():
         etree.SubElement(info, "tradeItemMarketingMessage", languageCode=lang_code).text = text
+    return module
+
+
+def build_referenced_file_detail_information_module_element(
+    file_type_code: str,
+    file_format_name: str,
+    file_name: str,
+    uri: str,
+    is_primary_file: bool = False,
+    media_source_gln: str = "",
+) -> etree._Element:
+    """tradeItemInformation/extension module for a single referenced file
+    (e.g. a product image) - element order/shape verified against a real
+    GS1-portal reference export (NL, matnr 43706): referencedFileTypeCode,
+    fileFormatName, fileName, uniformResourceIdentifier, isPrimaryFile,
+    avpList/stringAVP[attributeName=mediaSourceGln], nested inside a single
+    referencedFileHeader. One module per file - call this once per image/
+    document and append each to extension_modules (the reference export only
+    had one image, so multi-file ordering/isPrimaryFile-selection is
+    unverified against a real multi-image example)."""
+    module = etree.Element(
+        f"{{{NS_REFERENCED_FILE_DETAIL_INFORMATION}}}referencedFileDetailInformationModule",
+        nsmap={"referenced_file_detail_information": NS_REFERENCED_FILE_DETAIL_INFORMATION, "xsi": NS_XSI},
+    )
+    module.set(f"{{{NS_XSI}}}schemaLocation", REFERENCED_FILE_DETAIL_INFORMATION_SCHEMA_LOCATION)
+    header = etree.SubElement(module, "referencedFileHeader")
+    etree.SubElement(header, "referencedFileTypeCode").text = file_type_code
+    etree.SubElement(header, "fileFormatName").text = file_format_name
+    etree.SubElement(header, "fileName").text = file_name
+    etree.SubElement(header, "uniformResourceIdentifier").text = uri
+    etree.SubElement(header, "isPrimaryFile").text = "TRUE" if is_primary_file else "FALSE"
+    if media_source_gln:
+        avp_list = etree.SubElement(header, "avpList")
+        etree.SubElement(avp_list, "stringAVP", attributeName="mediaSourceGln").text = media_source_gln
     return module
 
 

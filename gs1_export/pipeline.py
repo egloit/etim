@@ -109,6 +109,29 @@ def _dimension_in_mm(value, unit: str) -> Optional[int]:
     return mm if mm > 0 else None
 
 
+def _package_dimension_in_mm(value) -> Optional[int]:
+    """ZZEVLAE/ZZEVBRE/ZZEVTIE (individual-packaging length/width/depth) have
+    no companion unit field like MEABM - assumed to already be stored in
+    millimetres. Live-verified 2026-09-23 (see sap_database.
+    get_material_measurements' docstring): the mm assumption checks out
+    against MARA.VOLUM for 3 real articles."""
+    if value is None:
+        return None
+    mm = round(float(value))
+    return mm if mm > 0 else None
+
+
+# File extension -> GS1 fileFormatName, matching the casing seen in the real
+# GS1-portal reference export ("Jpeg" for a .JPEG file). Falls back to the
+# extension itself (capitalised) for anything not seen in practice yet.
+_FILE_FORMAT_NAMES = {"jpg": "Jpeg", "jpeg": "Jpeg", "png": "Png", "pdf": "Pdf"}
+
+
+def _file_format_name(filename: str) -> str:
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return _FILE_FORMAT_NAMES.get(ext, ext.capitalize())
+
+
 def _build_sap_extension_modules(
     hana_conn,
     matnr: str,
@@ -128,9 +151,26 @@ def _build_sap_extension_modules(
 
     measurements = sap_database.get_material_measurements(hana_conn, matnr)
     if measurements:
-        depth = _dimension_in_mm(measurements["length"], measurements["dimension_unit"])
-        width = _dimension_in_mm(measurements["width"], measurements["dimension_unit"])
-        height = _dimension_in_mm(measurements["height"], measurements["dimension_unit"])
+        # ZZEVLAE(length)/ZZEVBRE(width)/ZZEVTIE(depth) preferred over
+        # LAENG/BREIT/HOEHE - mirrors the LAENG->depth/HOEHE->height mapping
+        # structurally, but note ZZEVTIE is SAP's own "Tiefe" (depth) field
+        # mapped here to GS1 "height", same positional convention as before.
+        # The mm-unit assumption is live-verified (see sap_database.
+        # get_material_measurements' docstring); the depth/height axis
+        # assignment itself is still a best guess - user confirmed 2026-09-23
+        # to ship with it rather than block on further verification.
+        depth = (
+            _package_dimension_in_mm(measurements.get("package_length"))
+            or _dimension_in_mm(measurements["length"], measurements["dimension_unit"])
+        )
+        width = (
+            _package_dimension_in_mm(measurements.get("package_width"))
+            or _dimension_in_mm(measurements["width"], measurements["dimension_unit"])
+        )
+        height = (
+            _package_dimension_in_mm(measurements.get("package_depth"))
+            or _dimension_in_mm(measurements["height"], measurements["dimension_unit"])
+        )
         gross_weight = _weight_in_grams(measurements["gross_weight"], measurements["weight_unit"])
         net_weight = _weight_in_grams(measurements["net_weight"], measurements["weight_unit"])
         if any(v is not None for v in (depth, width, height, gross_weight, net_weight)):
@@ -461,16 +501,40 @@ def export_batch(
                 )
             )
 
-            # marketingInformationModule/tradeItemMarketingMessage - placeholder
-            # source MAKTX (SAP material short text) via the Postgres PIM-values
-            # table, confirmed by the user 2026-09-03 as a stand-in until the
-            # real marketing-copy field is identified (see
+            # referencedFileDetailInformationModule - primary product image
+            # only for now (asset_code 101/VIEW), see
+            # database.get_primary_product_image's docstring. Other asset
+            # types (DETAIL/DIMENSION/AMBIENT images, 360 video) deliberately
+            # parked, user to clarify their referencedFileTypeCode later.
+            image = gs1_mapping.get_primary_product_image(conn, matnr)
+            if image:
+                extension_modules.append(
+                    gs1_exporter.build_referenced_file_detail_information_module_element(
+                        file_type_code="PRODUCT_IMAGE",
+                        file_format_name=_file_format_name(image["filename"]),
+                        file_name=image["filename"],
+                        uri=image["url"],
+                        is_primary_file=True,
+                        media_source_gln=GS1_SENDER_GLN,
+                    )
+                )
+            else:
+                logger.info(
+                    "GS1 EXPORT | matnr=%s: kein VIEW-Bild gefunden, "
+                    "referencedFileDetailInformationModule wird ausgelassen",
+                    matnr,
+                )
+
+            # marketingInformationModule/tradeItemMarketingMessage - source
+            # PIM_ARTIKELTEXT (pim_catalog_textarea), confirmed by the user
+            # 2026-09-23 as the real flowing marketing-copy field, replacing
+            # the earlier MAKTX (SAP material short text) placeholder - see
             # gs1_exporter.build_marketing_information_module_element's
-            # docstring). Uses the same PIM-locale convention as
+            # docstring. Uses the same PIM-locale convention as
             # propertyDescription (language_mapping.json), not SAP's spras.
             marketing_texts_by_language: dict[str, str] = {}
             for lang_code, lang_cfg in languages:
-                text = gs1_mapping.get_pim_catalog_text_value(conn, matnr, "MAKTX", lang_cfg["pim_locale"])
+                text = gs1_mapping.get_pim_catalog_textarea_value(conn, matnr, "PIM_ARTIKELTEXT", lang_cfg["pim_locale"])
                 if text:
                     marketing_texts_by_language[lang_cfg["gs1_code"]] = text
             if marketing_texts_by_language:
@@ -479,7 +543,7 @@ def export_batch(
                 )
             else:
                 logger.info(
-                    "GS1 EXPORT | matnr=%s: kein MAKTX-Text (Postgres) gefunden, "
+                    "GS1 EXPORT | matnr=%s: kein PIM_ARTIKELTEXT gefunden, "
                     "marketingInformationModule wird ausgelassen",
                     matnr,
                 )

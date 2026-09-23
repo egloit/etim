@@ -228,6 +228,69 @@ def get_pim_catalog_text_value(
         return None
 
 
+def get_pim_catalog_textarea_value(
+    conn: psycopg.Connection, matnr: str, attribute_code: str, locale: str
+) -> Optional[str]:
+    """Same shape as get_pim_catalog_text_value(), but against
+    public.pim_egloakeneo_product_values_pim_catalog_textarea - PIM's
+    textarea (multi-line) fields live in a separate table from its single-
+    line pim_catalog_text fields. Used for PIM_ARTIKELTEXT, confirmed
+    2026-09-23 as the real tradeItemMarketingMessage source, replacing the
+    MAKTX placeholder (see gs1_exporter.build_marketing_information_module_
+    element's docstring)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT data
+                FROM public.pim_egloakeneo_product_values_pim_catalog_textarea
+                WHERE matnr = %s AND attribute_code = %s AND locale = %s
+                LIMIT 1
+                """,
+                (matnr, attribute_code, locale),
+            )
+            row = cur.fetchone()
+            if not row or not row[0] or row[0] in ("[]", "null"):
+                return None
+            return row[0].replace("\\/", "/")
+    except psycopg.errors.UndefinedTable:
+        logger.warning(
+            "pim_egloakeneo_product_values_pim_catalog_textarea existiert noch nicht - "
+            "Text nicht bestimmbar."
+        )
+        return None
+
+
+def get_primary_product_image(conn: psycopg.Connection, matnr: str) -> Optional[dict]:
+    """Look up the main product photo from public.dam_cdh_product_assets_view
+    for referencedFileDetailInformationModule. Scoped to asset_code='101'
+    (asset_code_name 'VIEW') and asset_type='IMAGE' only - the user decided
+    2026-09-23 to ship just the primary product shot for now, not the other
+    asset types seen on the view (DETAIL/DIMENSION/AMBIENT images, 360 VIDEO)
+    - those need their own referencedFileTypeCode decisions, parked for
+    later. url_default_resolution is a real, directly usable URL (unlike the
+    "NB" placeholder seen in the real GS1-portal reference export). Tolerant
+    of the view not existing yet, same pattern as the other lookups."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT url_default_resolution, filename_for_url
+                FROM public.dam_cdh_product_assets_view
+                WHERE matnr = %s AND asset_code = '101' AND asset_type = 'IMAGE'
+                LIMIT 1
+                """,
+                (matnr,),
+            )
+            row = cur.fetchone()
+            if not row or not row[0] or not row[1]:
+                return None
+            return {"url": row[0], "filename": row[1]}
+    except psycopg.errors.UndefinedTable:
+        logger.warning("dam_cdh_product_assets_view existiert noch nicht - Produktbild nicht bestimmbar.")
+        return None
+
+
 def get_manual_property_value(conn: psycopg.Connection, matnr: str, pick_id: str) -> Optional[str]:
     """Look up a manually-maintained property value for a matnr+Pick from
     public.gs1_manual_property_values - used for GDSN attributes GS1 itself

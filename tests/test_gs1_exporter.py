@@ -7,6 +7,7 @@ from gs1_export.gs1_exporter import (
     NS_LIGHTING_DEVICE,
     NS_MARKETING_INFORMATION,
     NS_PLACE_OF_ITEM_ACTIVITY,
+    NS_REFERENCED_FILE_DETAIL_INFORMATION,
     NS_SBDH,
     NS_TRADE_ITEM_DESCRIPTION,
     NS_TRADE_ITEM_MEASUREMENTS,
@@ -23,6 +24,7 @@ from gs1_export.gs1_exporter import (
     build_measurement_property_element,
     build_notification_element,
     build_place_of_item_activity_module_element,
+    build_referenced_file_detail_information_module_element,
     build_string_property_element,
     build_trade_item_description_module_element,
     build_trade_item_element,
@@ -285,6 +287,36 @@ def test_build_marketing_information_module_element():
 def test_build_marketing_information_module_element_empty_when_no_languages():
     module = build_marketing_information_module_element(messages_by_language={})
     assert module.find("marketingInformation").findall("tradeItemMarketingMessage") == []
+
+
+def test_build_referenced_file_detail_information_module_element():
+    module = build_referenced_file_detail_information_module_element(
+        file_type_code="PRODUCT_IMAGE",
+        file_format_name="Jpeg",
+        file_name="09002759440558_C1R0.JPEG",
+        uri="https://assets.eglo.com/09002759440558_C1R0.JPEG",
+        is_primary_file=True,
+        media_source_gln="8719333022437",
+    )
+
+    assert etree.QName(module).localname == "referencedFileDetailInformationModule"
+    assert etree.QName(module).namespace == NS_REFERENCED_FILE_DETAIL_INFORMATION
+    header = module.find("referencedFileHeader")
+    assert header.find("referencedFileTypeCode").text == "PRODUCT_IMAGE"
+    assert header.find("fileFormatName").text == "Jpeg"
+    assert header.find("fileName").text == "09002759440558_C1R0.JPEG"
+    assert header.find("uniformResourceIdentifier").text == "https://assets.eglo.com/09002759440558_C1R0.JPEG"
+    assert header.find("isPrimaryFile").text == "TRUE"
+    assert header.find("avpList/stringAVP").text == "8719333022437"
+    assert header.find("avpList/stringAVP").get("attributeName") == "mediaSourceGln"
+
+
+def test_build_referenced_file_detail_information_module_element_no_gln_omits_avp_list():
+    module = build_referenced_file_detail_information_module_element(
+        file_type_code="PRODUCT_IMAGE", file_format_name="Jpeg", file_name="x.jpg", uri="https://x/x.jpg",
+    )
+    assert module.find("referencedFileHeader/isPrimaryFile").text == "FALSE"
+    assert module.find("referencedFileHeader/avpList") is None
 
 
 def test_build_place_of_item_activity_module_element_with_import_classification():

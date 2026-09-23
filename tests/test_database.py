@@ -72,7 +72,9 @@ class _RecordingCursor:
         # would actually raise UndefinedTable against a real table.
         raises_here = (
             "gs1_export_history" in query or "gs1_export_files" in query
+            # "..._pim_catalog_text" is a substring of "..._pim_catalog_textarea" too.
             or "pim_egloakeneo_product_values_pim_catalog_text" in query
+            or "dam_cdh_product_assets_view" in query
         )
         if self._raise_on_execute and raises_here:
             raise self._raise_on_execute
@@ -210,3 +212,47 @@ def test_get_pim_catalog_text_value_tolerates_missing_table():
     cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
     conn = _RecordingConnection(cursor)
     assert database.get_pim_catalog_text_value(conn, "43706", "MAKTX", "en_GB") is None
+
+
+def test_get_pim_catalog_textarea_value_unescapes_slashes():
+    cursor = _RecordingCursor(fetchone_result=("A wall light made of white metal\\/wood.",))
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_textarea_value(conn, "43706", "PIM_ARTIKELTEXT", "en_GB") == \
+        "A wall light made of white metal/wood."
+
+
+def test_get_pim_catalog_textarea_value_treats_empty_array_marker_as_none():
+    cursor = _RecordingCursor(fetchone_result=("[]",))
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_textarea_value(conn, "43706", "PIM_ARTIKELTEXT", "en_GB") is None
+
+
+def test_get_pim_catalog_textarea_value_tolerates_missing_table():
+    cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_textarea_value(conn, "43706", "PIM_ARTIKELTEXT", "en_GB") is None
+
+
+def test_get_primary_product_image_returns_url_and_filename():
+    cursor = _RecordingCursor(fetchone_result=(
+        "https://eglo.contentdeliveryhub.net/api/data/std/images/abc/c/JPG", "390047_101_0001.jpg",
+    ))
+    conn = _RecordingConnection(cursor)
+    result = database.get_primary_product_image(conn, "390047")
+    assert result == {
+        "url": "https://eglo.contentdeliveryhub.net/api/data/std/images/abc/c/JPG",
+        "filename": "390047_101_0001.jpg",
+    }
+    assert cursor.calls[0][1] == ("390047",)
+
+
+def test_get_primary_product_image_returns_none_when_no_row():
+    cursor = _RecordingCursor(fetchone_result=None)
+    conn = _RecordingConnection(cursor)
+    assert database.get_primary_product_image(conn, "390047") is None
+
+
+def test_get_primary_product_image_tolerates_missing_view():
+    cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
+    conn = _RecordingConnection(cursor)
+    assert database.get_primary_product_image(conn, "390047") is None

@@ -39,11 +39,25 @@ def get_connection() -> dbapi.Connection:
 def get_material_measurements(conn: dbapi.Connection, matnr: str) -> Optional[dict]:
     """Weight/dimensions from MARA (General Material Data), one row per
     material. Reliably has BRGEW/NTGEW/GEWEI (weight); LAENG/BREIT/HOEHE
-    (dimensions) are frequently 0/unset in practice - see pipeline.py, which
-    treats a 0 dimension as "not available" rather than sending it as-is."""
+    (raw material dimensions) are frequently 0/unset in practice - see
+    pipeline.py, which prefers ZZEVLAE/ZZEVBRE/ZZEVTIE (individual-packaging
+    length/width/depth, confirmed by the user 2026-09-23 as a more reliably
+    populated dimension source than LAENG/BREIT/HOEHE) and only falls back to
+    LAENG/BREIT/HOEHE when the ZZEV* fields are empty/zero.
+
+    Unlike LAENG/BREIT/HOEHE, the ZZEV* fields have no companion unit field
+    like MEABM - pipeline.py assumes they're already stored in millimetres.
+    Live-verified 2026-09-23 against 3 real articles (43706/89534/900092):
+    ZZEVLAE*ZZEVBRE*ZZEVTIE (as mm, converted to dm³) matches the live VOLUM
+    field exactly in all 3 cases, confirming the millimetre-unit assumption.
+    Not independently verified: whether ZZEVTIE really maps to GS1 "height"
+    (vs. "depth") - the volume cross-check can't distinguish axis order.
+    User decided 2026-09-23 to keep the current depth/width/height mapping
+    as the best available guess rather than block on this."""
     cur = conn.cursor()
     cur.execute(
-        "SELECT BRGEW, NTGEW, GEWEI, LAENG, BREIT, HOEHE, MEABM, VOLUM, VOLEH "
+        "SELECT BRGEW, NTGEW, GEWEI, LAENG, BREIT, HOEHE, MEABM, VOLUM, VOLEH, "
+        "ZZEVLAE, ZZEVBRE, ZZEVTIE "
         "FROM MARA WHERE MATNR = ?",
         (matnr,),
     )
@@ -54,6 +68,7 @@ def get_material_measurements(conn: dbapi.Connection, matnr: str) -> Optional[di
         "gross_weight": row[0], "net_weight": row[1], "weight_unit": row[2],
         "length": row[3], "width": row[4], "height": row[5], "dimension_unit": row[6],
         "volume": row[7], "volume_unit": row[8],
+        "package_length": row[9], "package_width": row[10], "package_depth": row[11],
     }
 
 

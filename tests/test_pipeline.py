@@ -45,11 +45,19 @@ def _stub_sap_connection(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stub_product_image(monkeypatch):
+    """Most pipeline tests aren't about referencedFileDetailInformationModule
+    - default to "no image found" so tests don't need a cursor for it. Tests
+    that actually cover the image module override this, see below."""
+    monkeypatch.setattr(database, "get_primary_product_image", lambda conn, matnr: None)
+
+
+@pytest.fixture(autouse=True)
 def _stub_marketing_text(monkeypatch):
     """Most pipeline tests aren't about tradeItemMarketingMessage - default to
-    "no MAKTX text found" so tests don't need a cursor for it. Tests that
+    "no PIM_ARTIKELTEXT found" so tests don't need a cursor for it. Tests that
     actually cover marketingInformationModule override this, see below."""
-    monkeypatch.setattr(database, "get_pim_catalog_text_value", lambda conn, matnr, attribute_code, locale: None)
+    monkeypatch.setattr(database, "get_pim_catalog_textarea_value", lambda conn, matnr, attribute_code, locale: None)
 
 
 def _trade_items(xml_bytes):
@@ -252,7 +260,18 @@ def test_export_batch_skips_lighting_device_module_without_pim_fas_05_1(monkeypa
     assert items[0].find(f"tradeItemInformation/extension/{{{NS_LIGHTING_DEVICE}}}lightingDeviceModule") is None
 
 
-def test_export_batch_builds_marketing_information_module_when_maktx_present(monkeypatch, product):
+def test_file_format_name_known_extensions():
+    assert pipeline._file_format_name("390047_101_0001.jpg") == "Jpeg"
+    assert pipeline._file_format_name("390047_101_0001.JPEG") == "Jpeg"
+    assert pipeline._file_format_name("sheet.pdf") == "Pdf"
+
+
+def test_file_format_name_unknown_extension_capitalised():
+    assert pipeline._file_format_name("clip.mp4") == "Mp4"
+    assert pipeline._file_format_name("no_extension") == ""
+
+
+def test_export_batch_builds_referenced_file_module_when_image_present(monkeypatch, product):
     monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
     monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
     monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
@@ -263,9 +282,62 @@ def test_export_batch_builds_marketing_information_module_when_maktx_present(mon
     monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: None)
     monkeypatch.setattr(
         database,
-        "get_pim_catalog_text_value",
+        "get_primary_product_image",
+        lambda conn, matnr: {
+            "url": "https://eglo.contentdeliveryhub.net/api/data/std/images/abc/c/JPG",
+            "filename": "62053_101_0001.jpg",
+        },
+    )
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    from gs1_export.gs1_exporter import NS_REFERENCED_FILE_DETAIL_INFORMATION
+    items = _trade_items(xml_bytes)
+    module = items[0].find(
+        f"tradeItemInformation/extension/{{{NS_REFERENCED_FILE_DETAIL_INFORMATION}}}referencedFileDetailInformationModule"
+    )
+    assert module is not None
+    header = module.find("referencedFileHeader")
+    assert header.find("referencedFileTypeCode").text == "PRODUCT_IMAGE"
+    assert header.find("fileFormatName").text == "Jpeg"
+    assert header.find("fileName").text == "62053_101_0001.jpg"
+    assert header.find("uniformResourceIdentifier").text == "https://eglo.contentdeliveryhub.net/api/data/std/images/abc/c/JPG"
+    assert header.find("isPrimaryFile").text == "TRUE"
+
+
+def test_export_batch_skips_referenced_file_module_without_image(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.020", "pimfeld": "ZZSER"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: None)
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    from gs1_export.gs1_exporter import NS_REFERENCED_FILE_DETAIL_INFORMATION
+    items = _trade_items(xml_bytes)
+    assert items[0].find(
+        f"tradeItemInformation/extension/{{{NS_REFERENCED_FILE_DETAIL_INFORMATION}}}referencedFileDetailInformationModule"
+    ) is None
+
+
+def test_export_batch_builds_marketing_information_module_when_artikeltext_present(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.020", "pimfeld": "ZZSER"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: None)
+    monkeypatch.setattr(
+        database,
+        "get_pim_catalog_textarea_value",
         lambda conn, matnr, attribute_code, locale: (
-            "WL/1 E27 white/wood 'TOWNSHEND'" if locale == "en_GB" else None
+            "The TOWNSHEND wall light is made of white metal." if locale == "en_GB" else None
         ),
     )
 
@@ -276,11 +348,11 @@ def test_export_batch_builds_marketing_information_module_when_maktx_present(mon
     module = items[0].find(f"tradeItemInformation/extension/{{{NS_MARKETING_INFORMATION}}}marketingInformationModule")
     assert module is not None
     message = module.find("marketingInformation/tradeItemMarketingMessage")
-    assert message.text == "WL/1 E27 white/wood 'TOWNSHEND'"
+    assert message.text == "The TOWNSHEND wall light is made of white metal."
     assert message.get("languageCode") == "en"
 
 
-def test_export_batch_skips_marketing_information_module_without_maktx(monkeypatch, product):
+def test_export_batch_skips_marketing_information_module_without_artikeltext(monkeypatch, product):
     monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
     monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
     monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
@@ -762,6 +834,15 @@ def test_dimension_in_mm_none_for_zero_or_unknown_unit():
     assert pipeline._dimension_in_mm(5, "") is None
 
 
+def test_package_dimension_in_mm_passes_through():
+    assert pipeline._package_dimension_in_mm(185) == 185
+
+
+def test_package_dimension_in_mm_none_for_zero_or_missing():
+    assert pipeline._package_dimension_in_mm(0) is None
+    assert pipeline._package_dimension_in_mm(None) is None
+
+
 class FakeHanaConnection:
     def close(self):
         pass
@@ -802,6 +883,29 @@ def test_build_sap_extension_modules_builds_all_three(monkeypatch):
     assert {d.get("languageCode") for d in descriptions.findall("descriptionShort")} == {"en", "nl"}
     assert modules[2].find("placeOfProductActivity/countryOfOrigin/countryCode").text == "156"
     assert modules[2].find("importClassification/importClassificationValue").text == "94051990"
+
+
+def test_build_sap_extension_modules_prefers_package_dimensions_over_length_width_height(monkeypatch):
+    monkeypatch.setattr(
+        sap_database, "get_material_measurements",
+        lambda conn, matnr: {
+            "gross_weight": None, "net_weight": None, "weight_unit": "KG",
+            "length": 18.5, "width": 18.5, "height": 21.5, "dimension_unit": "CM",
+            "volume": 0, "volume_unit": "",
+            "package_length": 200, "package_width": 190, "package_depth": 220,
+        },
+    )
+    monkeypatch.setattr(sap_database, "get_material_descriptions", lambda conn, matnr: {})
+    monkeypatch.setattr(sap_database, "get_material_origin", lambda conn, matnr, werks: None)
+
+    modules = pipeline._build_sap_extension_modules(
+        FakeHanaConnection(), "43706", "", [], sap_language_config={}, country_code_config={},
+    )
+
+    measurements = modules[0].find("tradeItemMeasurements")
+    assert measurements.find("depth").text == "200"
+    assert measurements.find("width").text == "190"
+    assert measurements.find("height").text == "220"
 
 
 def test_build_sap_extension_modules_returns_empty_list_when_hana_unreachable():
