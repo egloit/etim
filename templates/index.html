@@ -734,7 +734,7 @@ async function handleGs1Download(resp) {
     <div class="alert alert-success d-flex align-items-center gap-2">
       <i class="bi bi-check-circle-fill fs-4"></i>
       <div>
-        <strong>GS1-XML wurde erzeugt und heruntergeladen.</strong><br/>
+        <strong>${filename.startsWith('etim10') ? 'ETIM10-BMEcat' : 'GS1-XML'} wurde erzeugt und heruntergeladen.</strong><br/>
         ${articleCount} Artikel verarbeitet.
         ${warnings.length > 0
           ? `<br/><span class="text-warning-emphasis small">${warnings.length} Warnung(en): ${warnings.map(escHtml).join('; ')}</span>`

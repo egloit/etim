@@ -1,0 +1,8 @@
+{
+  "_comment": "Sprachauswahl im Formular -> BMEcat-Sprachcode (ISO 639-2, wie im XSD), PIM-Locale (Texte/Labels) und Sprachteil des Datenblatt-Links tools.eglo.com/tds/<tds>/<matnr>. 'slo' ist im XSD Slowakisch (Slowenisch waere 'slv') - bitte pruefen.",
+  "ger": { "bmecat": "ger", "pim_locale": "de_DE", "tds": "ger-DE" },
+  "eng": { "bmecat": "eng", "pim_locale": "en_GB", "tds": "eng-GB" },
+  "slo": { "bmecat": "slo", "pim_locale": "sk_SK", "tds": "slo-SK" },
+  "nl":  { "bmecat": "dut", "pim_locale": "nl_NL", "tds": "dut-NL" },
+  "fr":  { "bmecat": "fre", "pim_locale": "fr_FR", "tds": "fre-FR" }
+}
