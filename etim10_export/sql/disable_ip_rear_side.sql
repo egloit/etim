@@ -5,3 +5,9 @@ UPDATE public.etim10_feature_rules
 SET active = FALSE, updated_at = now(),
     note = note || ' | deaktiviert: ZZLMSCH ist die Frontschutzart, keine Quelle fuer die Rueckseite'
 WHERE id = 351 AND class_id = 'EC001744' AND feature_id = 'EF017556';
+
+-- Ebenso fuer Decken-/Wandleuchten (EC002892), vom User freigegeben am 2026-10-02.
+UPDATE public.etim10_feature_rules
+SET active = FALSE, updated_at = now(),
+    note = note || ' | deaktiviert: ZZLMSCH ist die Frontschutzart, keine Quelle fuer die Rueckseite'
+WHERE id = 21 AND class_id = 'EC002892' AND feature_id = 'EF017556';
