@@ -1088,6 +1088,10 @@ async function loadGs1Files() {
           <a href="/gs1/files/${f.id}/download" class="btn btn-sm btn-outline-secondary">
             <i class="bi bi-download me-1"></i>Download
           </a>
+          ${f.issue_count > 0 ? `<a href="/gs1/files/${f.id}/issues" class="btn btn-sm btn-outline-warning ms-1"
+             title="Probleme je Artikel als Excel – zur Klärung mit dem Datenmanagement">
+            <i class="bi bi-exclamation-triangle me-1"></i>Fehlerliste (${f.issue_count})
+          </a>` : ''}
         </td>
       </tr>`;
     }).join('');
@@ -1159,6 +1163,10 @@ async function loadEtimFiles() {
           <a href="/etim10/files/${f.id}/download" class="btn btn-sm btn-outline-secondary">
             <i class="bi bi-download me-1"></i>Download
           </a>
+          ${f.issue_count > 0 ? `<a href="/etim10/files/${f.id}/issues" class="btn btn-sm btn-outline-warning ms-1"
+             title="Probleme je Artikel als Excel – zur Klärung mit dem Datenmanagement">
+            <i class="bi bi-exclamation-triangle me-1"></i>Fehlerliste (${f.issue_count})
+          </a>` : ''}
         </td>
       </tr>`;
     }).join('');

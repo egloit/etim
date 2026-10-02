@@ -7,7 +7,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY main.py auth.py parser.py validator.py json_builder.py sender.py ./
+COPY main.py auth.py parser.py validator.py json_builder.py sender.py issue_report.py ./
 COPY templates/ templates/
 COPY gs1_export/ gs1_export/
 COPY etim10_export/ etim10_export/

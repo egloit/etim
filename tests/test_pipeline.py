@@ -770,7 +770,7 @@ def test_save_export_file_delegates_to_database(monkeypatch):
 
     pipeline.save_export_file("gs1_export_20260828.xml", "user@eglo.com", ["43706"], b"<xml/>")
 
-    assert calls == [("gs1_export_20260828.xml", "user@eglo.com", ["43706"], b"<xml/>")]
+    assert calls == [("gs1_export_20260828.xml", "user@eglo.com", ["43706"], b"<xml/>", None)]
 
 
 def test_save_export_file_swallows_connection_failure(monkeypatch):

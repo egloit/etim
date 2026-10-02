@@ -31,6 +31,7 @@ from etim10_export.pipeline import get_changed_articles as etim10_get_changed_ar
 from etim10_export.pipeline import get_export_file as etim10_get_export_file
 from etim10_export.pipeline import list_export_files as etim10_list_export_files
 from etim10_export.pipeline import save_export_file as etim10_save_export_file
+from issue_report import collect_issues, to_xlsx
 from json_builder import build_json
 from parser import parse_file
 from sender import send_payload
@@ -314,6 +315,45 @@ async def etim10_file_download(request: Request, file_id: int):
     )
 
 
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _issues_response(file: dict) -> Response:
+    name = file["filename"].rsplit(".", 1)[0] + "_fehlerliste.xlsx"
+    return Response(content=to_xlsx(file["issues"], name), media_type=_XLSX,
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/etim10/files/{file_id}/issues")
+async def etim10_file_issues(request: Request, file_id: int):
+    """Problem list of a generated ETIM10 file as Excel (per article: feature, value, message)."""
+    user_email = _etim_user(request)
+    if not user_email:
+        return JSONResponse({"success": False, "errors": [{"field": "Fehlerliste", "message": "Kein Zugriff.", "row": None}]}, status_code=403)
+    try:
+        file = etim10_get_export_file(file_id, user_email)
+    except Etim10PipelineError as exc:
+        return JSONResponse({"success": False, "errors": [{"field": "Fehlerliste", "message": str(exc), "row": None}]}, status_code=502)
+    if file is None:
+        return JSONResponse({"success": False, "errors": [{"field": "Fehlerliste", "message": "Datei nicht gefunden.", "row": None}]}, status_code=404)
+    return _issues_response(file)
+
+
+@app.get("/gs1/files/{file_id}/issues")
+async def gs1_file_issues(request: Request, file_id: int):
+    """Problem list of a generated GS1 file as Excel."""
+    user_email = request.session.get("user", {}).get("email")
+    if "gs1" not in request.session.get("user", {}).get("roles", []) or not user_email:
+        return JSONResponse({"success": False, "errors": [{"field": "Fehlerliste", "message": "Kein Zugriff.", "row": None}]}, status_code=403)
+    try:
+        file = get_export_file(file_id, user_email)
+    except PipelineError as exc:
+        return JSONResponse({"success": False, "errors": [{"field": "Fehlerliste", "message": str(exc), "row": None}]}, status_code=502)
+    if file is None:
+        return JSONResponse({"success": False, "errors": [{"field": "Fehlerliste", "message": "Datei nicht gefunden.", "row": None}]}, status_code=404)
+    return _issues_response(file)
+
+
 @app.post("/validate")
 async def validate_endpoint(
     languages: Annotated[Optional[List[str]], Form()] = None,
@@ -542,7 +582,7 @@ async def submit_endpoint(
         )
 
         filename = f"gs1_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml"
-        save_export_file(filename, exported_by, matnrs, xml_bytes)
+        save_export_file(filename, exported_by, matnrs, xml_bytes, collect_issues(all_warnings, validation_errors))
         return Response(
             content=xml_bytes,
             media_type="application/xml",
@@ -563,10 +603,11 @@ async def submit_endpoint(
     if mode == "etim" and ETIM10_DIRECT_EXPORT:
         matnrs = [r.get("Materialnummer", "").strip() for r in rows if r.get("Materialnummer", "").strip()]
         exported_by = request.session.get("user", {}).get("email") or None
+        warning_details: list[str] = []
         try:
             xml_bytes, export_warnings, validation_errors = etim10_export_batch(
                 matnrs, lang_list, kunnr.strip(), vkorg.strip(), vtweg.strip(), spart.strip(),
-                werks.strip(), preise, exported_by,
+                werks.strip(), preise, exported_by, warning_details,
             )
         except Etim10PipelineError as exc:
             logger.error("ETIM10 EXPORT ERROR | %s", exc)
@@ -590,7 +631,8 @@ async def submit_endpoint(
             all_warnings = all_warnings[:_MAX_HEADER_WARNINGS] + [f"... und {rest} weitere Warnungen"]
 
         filename = f"etim10_{kunnr.strip().zfill(10)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml"
-        etim10_save_export_file(filename, exported_by, matnrs, xml_bytes)
+        issues = collect_issues(warning_details + [w.message for w in warnings], validation_errors)
+        etim10_save_export_file(filename, exported_by, matnrs, xml_bytes, issues)
         return Response(
             content=xml_bytes,
             media_type="application/xml",

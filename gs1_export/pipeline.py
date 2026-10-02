@@ -651,7 +651,8 @@ def get_article_changes(matnr: str) -> Optional[list[dict]]:
     return snapshot.diff_snapshots(stored.get("values", {}), current.get(matnr, {}), names)
 
 
-def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str], xml_bytes: bytes) -> None:
+def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str], xml_bytes: bytes,
+                     issues: Optional[list[dict]] = None) -> None:
     """Archive a generated GS1 XML file so exported_by can find/re-download it
     later, see get_export_file()/list_export_files(). Swallows DB-connection
     failures (logs only) rather than raising - saving an already-successful
@@ -663,7 +664,7 @@ def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str
         return
 
     try:
-        database.save_export_file(conn, filename, exported_by, matnrs, xml_bytes)
+        database.save_export_file(conn, filename, exported_by, matnrs, xml_bytes, issues)
     finally:
         conn.close()
 

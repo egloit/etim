@@ -245,10 +245,13 @@ def _build_product(matnr: str, product: dict, languages: list[dict], rules: Rule
 
 def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: str, vtweg: str, spart: str,
                  werks: str = "", preise: str = "none", exported_by: Optional[str] = None,
+                 warning_details: Optional[list[str]] = None,
                  ) -> tuple[bytes, list[str], list[dict]]:
     """Build one BMEcat T_NEW_CATALOG document for *matnrs*.
 
-    Returns (xml_bytes, warnings, validation_errors)."""
+    Returns (xml_bytes, warnings grouped by cause, validation_errors); the
+    ungrouped per-article warnings go into *warning_details* if given (problem
+    list stored with the file)."""
     languages = _load_languages(lang_codes)
     unique_matnrs = list(dict.fromkeys(m.strip() for m in matnrs if m.strip()))
     warnings: list[str] = []
@@ -339,6 +342,8 @@ def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: st
     if without_price:
         warnings.insert(0, f"{len(without_price)} Artikel ohne Preis – Preisblock nur mit Datum (wie bisher "
                            f"im Lobster, laut XSD unvollständig).")
+    if warning_details is not None:
+        warning_details.extend(warnings)
     return xml_bytes, group_warnings(warnings), [e for e in errors if not _is_missing_price_error(e)]
 
 
@@ -468,7 +473,9 @@ def list_export_files(exported_by: str) -> list[dict]:
         with database.get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, filename, exported_at, article_count, matnrs FROM public.etim10_export_files
+                SELECT id, filename, exported_at, article_count, matnrs,
+                       COALESCE(jsonb_array_length(issues), 0)
+                FROM public.etim10_export_files
                 WHERE exported_by = %s ORDER BY exported_at DESC
                 """,
                 (exported_by,),
@@ -476,7 +483,7 @@ def list_export_files(exported_by: str) -> list[dict]:
     except Exception as exc:
         raise PipelineError(f"Datenbankfehler: {exc}") from exc
     return [{"id": r[0], "filename": r[1], "exported_at": r[2].isoformat() if r[2] else None,
-             "article_count": r[3], "matnrs": r[4]} for r in rows]
+             "article_count": r[3], "matnrs": r[4], "issue_count": r[5]} for r in rows]
 
 
 def get_export_file(file_id: int, exported_by: str) -> Optional[dict]:
@@ -484,24 +491,27 @@ def get_export_file(file_id: int, exported_by: str) -> Optional[dict]:
     try:
         with database.get_connection() as conn:
             row = conn.execute(
-                "SELECT filename, xml_content FROM public.etim10_export_files WHERE id = %s AND exported_by = %s",
+                "SELECT filename, xml_content, issues FROM public.etim10_export_files "
+                "WHERE id = %s AND exported_by = %s",
                 (file_id, exported_by),
             ).fetchone()
     except Exception as exc:
         raise PipelineError(f"Datenbankfehler: {exc}") from exc
-    return {"filename": row[0], "xml_content": bytes(row[1])} if row else None
+    return {"filename": row[0], "xml_content": bytes(row[1]), "issues": row[2] or []} if row else None
 
 
-def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str], xml_bytes: bytes) -> None:
-    """Archive the generated file (never fails the request, logs only)."""
+def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str], xml_bytes: bytes,
+                     issues: Optional[list[dict]] = None) -> None:
+    """Archive the generated file with its problem list (never fails the request, logs only)."""
     try:
         with database.get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO public.etim10_export_files (filename, exported_by, matnrs, article_count, xml_content)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO public.etim10_export_files
+                    (filename, exported_by, matnrs, article_count, xml_content, issues)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (filename, exported_by, matnrs, len(matnrs), xml_bytes),
+                (filename, exported_by, matnrs, len(matnrs), xml_bytes, Jsonb(issues or [])),
             )
     except Exception as exc:
         logger.error("ETIM10 EXPORT | Datei konnte nicht archiviert werden: %s", exc)

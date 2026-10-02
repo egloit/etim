@@ -441,6 +441,7 @@ def save_export_file(
     exported_by: Optional[str],
     matnrs: list[str],
     xml_bytes: bytes,
+    issues: Optional[list[dict]] = None,
 ) -> None:
     """Persist a generated GS1 XML file in public.gs1_export_files so the user
     who generated it can find/re-download it later (see list_export_files()/
@@ -453,10 +454,10 @@ def save_export_file(
             cur.execute(
                 """
                 INSERT INTO public.gs1_export_files
-                    (filename, exported_by, matnrs, article_count, xml_content)
-                VALUES (%s, %s, %s, %s, %s)
+                    (filename, exported_by, matnrs, article_count, xml_content, issues)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (filename, exported_by, matnrs, len(matnrs), xml_bytes),
+                (filename, exported_by, matnrs, len(matnrs), xml_bytes, Jsonb(issues or [])),
             )
     except psycopg.errors.UndefinedTable:
         logger.warning("gs1_export_files existiert noch nicht - Datei wird nicht archiviert.")
@@ -470,7 +471,8 @@ def list_export_files(conn: psycopg.Connection, exported_by: str) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, filename, exported_at, article_count, matnrs
+                SELECT id, filename, exported_at, article_count, matnrs,
+                       COALESCE(jsonb_array_length(issues), 0)
                 FROM public.gs1_export_files
                 WHERE exported_by = %s
                 ORDER BY exported_at DESC
@@ -484,6 +486,7 @@ def list_export_files(conn: psycopg.Connection, exported_by: str) -> list[dict]:
                     "exported_at": r[2].isoformat() if r[2] else None,
                     "article_count": r[3],
                     "matnrs": r[4],
+                    "issue_count": r[5],
                 }
                 for r in cur.fetchall()
             ]
@@ -500,14 +503,14 @@ def get_export_file(conn: psycopg.Connection, file_id: int, exported_by: str) ->
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT filename, xml_content
+                SELECT filename, xml_content, issues
                 FROM public.gs1_export_files
                 WHERE id = %s AND exported_by = %s
                 """,
                 (file_id, exported_by),
             )
             row = cur.fetchone()
-            return {"filename": row[0], "xml_content": row[1]} if row else None
+            return {"filename": row[0], "xml_content": row[1], "issues": row[2] or []} if row else None
     except psycopg.errors.UndefinedTable:
         logger.warning("gs1_export_files existiert noch nicht - Datei nicht abrufbar.")
         return None

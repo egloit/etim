@@ -147,7 +147,8 @@ def test_save_export_file_sends_expected_params():
     database.save_export_file(conn, "gs1_export_20260828.xml", "user@eglo.com", ["43706", "89534"], b"<xml/>")
     query, params = cursor.calls[0]
     assert "INSERT INTO public.gs1_export_files" in query
-    assert params == ("gs1_export_20260828.xml", "user@eglo.com", ["43706", "89534"], 2, b"<xml/>")
+    assert params[:5] == ("gs1_export_20260828.xml", "user@eglo.com", ["43706", "89534"], 2, b"<xml/>")
+    assert params[5].obj == []  # problem list (empty)
 
 
 def test_save_export_file_tolerates_missing_table():
@@ -160,7 +161,7 @@ def test_save_export_file_tolerates_missing_table():
 def test_list_export_files_maps_rows():
     now = datetime(2026, 8, 28, 9, 0, 0)
     cursor = _RecordingCursor(fetchall_result=[
-        (7, "gs1_export_20260828.xml", now, 2, ["43706", "89534"]),
+        (7, "gs1_export_20260828.xml", now, 2, ["43706", "89534"], 3),
     ])
     conn = _RecordingConnection(cursor)
     result = database.list_export_files(conn, "user@eglo.com")
@@ -170,6 +171,7 @@ def test_list_export_files_maps_rows():
         "exported_at": now.isoformat(),
         "article_count": 2,
         "matnrs": ["43706", "89534"],
+        "issue_count": 3,
     }]
     assert cursor.calls[0][1] == ("user@eglo.com",)
 
@@ -181,10 +183,10 @@ def test_list_export_files_returns_empty_list_when_table_missing():
 
 
 def test_get_export_file_returns_owned_file():
-    cursor = _RecordingCursor(fetchone_result=("gs1_export_20260828.xml", b"<xml/>"))
+    cursor = _RecordingCursor(fetchone_result=("gs1_export_20260828.xml", b"<xml/>", [{"matnr": "1"}]))
     conn = _RecordingConnection(cursor)
     result = database.get_export_file(conn, 7, "user@eglo.com")
-    assert result == {"filename": "gs1_export_20260828.xml", "xml_content": b"<xml/>"}
+    assert result == {"filename": "gs1_export_20260828.xml", "xml_content": b"<xml/>", "issues": [{"matnr": "1"}]}
     assert cursor.calls[0][1] == (7, "user@eglo.com")
 
 
