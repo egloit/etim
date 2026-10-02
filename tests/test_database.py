@@ -100,7 +100,16 @@ def test_upsert_export_history_sends_expected_params():
     database.upsert_export_history(conn, "43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com")
     query, params = cursor.calls[0]
     assert "INSERT INTO public.gs1_export_history" in query
-    assert params == ("43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com")
+    assert params == ("43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com", None)
+
+
+def test_upsert_export_history_stores_value_snapshot():
+    cursor = _RecordingCursor()
+    conn = _RecordingConnection(cursor)
+    snap = {"params": {"lang_codes": ["eng"], "vkorg": "0025", "werks": ""}, "values": {"pick:4.015": "weiss"}}
+    database.upsert_export_history(conn, "43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com", snap)
+    _, params = cursor.calls[0]
+    assert params[-1].obj == snap
 
 
 def test_upsert_export_history_tolerates_missing_table():
@@ -113,7 +122,7 @@ def test_upsert_export_history_tolerates_missing_table():
 def test_get_changed_articles_maps_rows():
     now = datetime(2026, 8, 28, 9, 0, 0)
     cursor = _RecordingCursor(fetchall_result=[
-        ("43706", now, "2026-08-20T10:00:00Z", "2026-08-27T15:30:00Z"),
+        ("43706", now, "2026-08-20T10:00:00Z", "2026-08-27T15:30:00Z", True),
     ])
     conn = _RecordingConnection(cursor)
     result = database.get_changed_articles(conn)
@@ -122,6 +131,7 @@ def test_get_changed_articles_maps_rows():
         "exported_at": now.isoformat(),
         "pim_updated_at_export": "2026-08-20T10:00:00Z",
         "pim_updated_now": "2026-08-27T15:30:00Z",
+        "has_details": True,
     }]
 
 

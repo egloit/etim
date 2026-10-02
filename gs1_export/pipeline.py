@@ -21,7 +21,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from . import database, gs1_exporter, gs1_mapping, pim_reader, sap_database, validator
+from . import database, gs1_exporter, gs1_mapping, pim_reader, sap_database, snapshot, validator
 
 load_dotenv()
 
@@ -256,7 +256,7 @@ def _resolve_crosswalk_value(conn, pickid: str, pim_codes: list[str]) -> Optiona
 
 def export_batch(
     matnrs: list[str], lang_codes: list[str], vkorg: str = "", exported_by: Optional[str] = None,
-    werks: str = "",
+    werks: str = "", record_history: bool = True, snapshots: Optional[dict] = None,
 ) -> tuple[bytes, list[str], list[dict]]:
     """Build a combined GS1 XML document for *matnrs*.
 
@@ -585,7 +585,14 @@ def export_batch(
             )
             catalogue_item = gs1_exporter.build_catalogue_item_element(trade_item)
             notifications.append(gs1_exporter.build_notification_element(catalogue_item, sender_gln=GS1_SENDER_GLN))
-            database.upsert_export_history(conn, matnr, brick_id, pim_updated_at, exported_by)
+            values = snapshot.snapshot_trade_item(trade_item)
+            if snapshots is not None:
+                snapshots[matnr] = values
+            if record_history:
+                # params: needed to rebuild the article identically for the change report
+                export_params = {"lang_codes": lang_codes, "vkorg": vkorg, "werks": werks}
+                database.upsert_export_history(conn, matnr, brick_id, pim_updated_at, exported_by,
+                                               {"params": export_params, "values": values})
     finally:
         conn.close()
         if hana_conn is not None:
@@ -618,6 +625,30 @@ def get_changed_articles() -> list[dict]:
         return database.get_changed_articles(conn)
     finally:
         conn.close()
+
+
+def get_article_changes(matnr: str) -> Optional[list[dict]]:
+    """What changed for *matnr* since its last GS1 export: the article is rebuilt
+    with the same languages/VKORG/plant as back then (nothing is written) and
+    compared value by value with the stored snapshot. None if the export has
+    no snapshot yet (exported before this feature existed)."""
+    try:
+        conn = database.get_connection()
+    except Exception as exc:
+        raise PipelineError(f"Datenbankverbindung fehlgeschlagen: {exc}") from exc
+    try:
+        stored = database.get_export_snapshot(conn, matnr)
+        if stored is None:
+            return None
+        names = database.get_pick_names(conn, stored["brick_id"]) if stored.get("brick_id") else {}
+    finally:
+        conn.close()
+
+    params = stored.get("params", {})
+    current: dict = {}
+    export_batch([matnr], params.get("lang_codes", []), params.get("vkorg", ""), None, params.get("werks", ""),
+                 record_history=False, snapshots=current)
+    return snapshot.diff_snapshots(stored.get("values", {}), current.get(matnr, {}), names)
 
 
 def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str], xml_bytes: bytes) -> None:

@@ -1021,15 +1021,45 @@ async function loadGs1ChangedArticles() {
 
     document.getElementById('gs1ChangedTitle').textContent =
       `${articles.length} Artikel wurden im PIM geändert seit dem letzten GS1-Export:`;
-    document.getElementById('gs1ChangedList').innerHTML = articles
-      .map(a => `<code>${escHtml(a.matnr)}</code>`)
-      .join(', ');
+    // Details (welche Werte sich geändert haben) werden erst beim Aufklappen
+    // geladen – der Artikel wird dafür neu aufgebaut (~1 s pro Artikel).
+    document.getElementById('gs1ChangedList').innerHTML = articles.map(a => `
+      <details class="mb-1" data-matnr="${escHtml(a.matnr)}" data-has-details="${a.has_details ? '1' : ''}">
+        <summary><code>${escHtml(a.matnr)}</code>
+          <span class="text-muted">(Export ${a.exported_at ? new Date(a.exported_at).toLocaleDateString('de-DE') : ''})</span></summary>
+        <div class="gs1-change-details ms-3"></div>
+      </details>`).join('');
+    document.querySelectorAll('#gs1ChangedList details').forEach(d =>
+      d.addEventListener('toggle', () => { if (d.open) loadGs1ChangeDetails(d); }));
     panel.classList.remove('d-none');
   } catch (e) {
     // Netzwerkfehler beim Hintergrund-Check ist kein Grund, die Seite zu stören
   }
 }
 loadGs1ChangedArticles();
+
+async function loadGs1ChangeDetails(detailsEl) {
+  const target = detailsEl.querySelector('.gs1-change-details');
+  if (detailsEl.dataset.loaded) return;
+  detailsEl.dataset.loaded = '1';
+  if (!detailsEl.dataset.hasDetails) {
+    target.innerHTML = '<span class="text-muted">Details erst ab dem nächsten Export dieses Artikels verfügbar.</span>';
+    return;
+  }
+  target.innerHTML = '<span class="text-muted"><span class="spinner-border spinner-border-sm me-1"></span>Vergleiche mit dem letzten Export…</span>';
+  try {
+    const resp = await fetch(`/gs1/changed-articles/${encodeURIComponent(detailsEl.dataset.matnr)}/details`);
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.status);
+    const changes = data.changes || [];
+    target.innerHTML = changes.length === 0
+      ? '<span class="text-muted">Keine Änderung an den GS1-Werten (geändert wurde nur etwas, das nicht im GS1-Export landet).</span>'
+      : `<ul class="mb-1">${changes.map(c => `<li>${etimChangeText(c)}</li>`).join('')}</ul>`;
+  } catch (e) {
+    detailsEl.dataset.loaded = '';
+    target.innerHTML = `<span class="text-danger">Vergleich fehlgeschlagen: ${escHtml(e.message)}</span>`;
+  }
+}
 
 /* =========================================================
    GS1: Übersicht bisher generierter Dateien (pro User)

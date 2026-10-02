@@ -119,3 +119,4 @@ def test_group_warnings_collapses_repeated_causes():
         "EF004282 (Light outlet): Wert 'EV003775' ist für EC001744 nicht zulässig – ausgelassen – 2 Artikel (z. B. 1, 2)",
         "6EX08-EFRO-BLN: Zolltarifnummer in SAP (MARC, Werk 0090) leer.",
     ]
+

@@ -7,6 +7,7 @@ import os
 from typing import Optional
 
 import psycopg
+from psycopg.types.json import Jsonb
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -341,6 +342,7 @@ def upsert_export_history(
     brick_id: Optional[str],
     pim_updated_at_export: Optional[str],
     exported_by: Optional[str],
+    value_snapshot: Optional[dict] = None,
 ) -> None:
     """Record/refresh "this matnr was GS1-exported, PIM's updated timestamp was
     X at that time" in public.gs1_export_history - one row per matnr, latest
@@ -353,15 +355,17 @@ def upsert_export_history(
             cur.execute(
                 """
                 INSERT INTO public.gs1_export_history
-                    (matnr, brick_id, exported_at, pim_updated_at_export, exported_by)
-                VALUES (%s, %s, now(), %s, %s)
+                    (matnr, brick_id, exported_at, pim_updated_at_export, exported_by, value_snapshot)
+                VALUES (%s, %s, now(), %s, %s, %s)
                 ON CONFLICT (matnr) DO UPDATE SET
                     brick_id = EXCLUDED.brick_id,
                     exported_at = EXCLUDED.exported_at,
                     pim_updated_at_export = EXCLUDED.pim_updated_at_export,
-                    exported_by = EXCLUDED.exported_by
+                    exported_by = EXCLUDED.exported_by,
+                    value_snapshot = EXCLUDED.value_snapshot
                 """,
-                (matnr, brick_id, pim_updated_at_export, exported_by),
+                (matnr, brick_id, pim_updated_at_export, exported_by,
+                 Jsonb(value_snapshot) if value_snapshot is not None else None),
             )
     except psycopg.errors.UndefinedTable:
         logger.warning("gs1_export_history existiert noch nicht - Export-Historie wird nicht gespeichert.")
@@ -382,7 +386,8 @@ def get_changed_articles(conn: psycopg.Connection) -> list[dict]:
             cur.execute("SET statement_timeout = '5s'")
             cur.execute(
                 """
-                SELECT h.matnr, h.exported_at, h.pim_updated_at_export, latest.updated
+                SELECT h.matnr, h.exported_at, h.pim_updated_at_export, latest.updated,
+                       h.value_snapshot IS NOT NULL
                 FROM public.gs1_export_history h
                 JOIN LATERAL (
                     SELECT updated
@@ -401,12 +406,33 @@ def get_changed_articles(conn: psycopg.Connection) -> list[dict]:
                     "exported_at": r[1].isoformat() if r[1] else None,
                     "pim_updated_at_export": r[2],
                     "pim_updated_now": r[3],
+                    "has_details": r[4],
                 }
                 for r in cur.fetchall()
             ]
     except psycopg.errors.UndefinedTable:
         logger.warning("gs1_export_history existiert noch nicht - keine Aenderungspruefung moeglich.")
         return []
+
+
+def get_export_snapshot(conn: psycopg.Connection, matnr: str) -> Optional[dict]:
+    """value_snapshot of the last GS1 export of *matnr* ({"params", "values"}), or None."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT brick_id, value_snapshot FROM public.gs1_export_history WHERE matnr = %s", (matnr,)
+        )
+        row = cur.fetchone()
+    return {"brick_id": row[0], **row[1]} if row and row[1] else None
+
+
+def get_pick_names(conn: psycopg.Connection, brick_id: str) -> dict[str, str]:
+    """{"pick:4.015": "Colour Family", ...} for readable change lists."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT pick_id, attribute_name FROM public.gs1_gpc_attribute_types WHERE brick_id = %s",
+            (brick_id,),
+        )
+        return {f"pick:{pick}": f"{pick} {name}" for pick, name in cur.fetchall() if name}
 
 
 def save_export_file(

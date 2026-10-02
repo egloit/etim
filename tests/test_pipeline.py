@@ -726,7 +726,11 @@ def test_export_batch_records_export_history_for_successful_matnr(monkeypatch, p
 
     pipeline.export_batch(["62053"], ["eng"], exported_by="user@eglo.com")
 
-    assert calls == [("62053", "10000552", "2026-08-21T10:00:00Z", "user@eglo.com")]
+    assert [c[:4] for c in calls] == [("62053", "10000552", "2026-08-21T10:00:00Z", "user@eglo.com")]
+    # snapshot of the exported values + the parameters to rebuild it for the change report
+    snap = calls[0][4]
+    assert snap["params"] == {"lang_codes": ["eng"], "vkorg": "", "werks": ""}
+    assert snap["values"]["brick"] == "10000552"
 
 
 def test_export_batch_does_not_record_history_for_unknown_matnr(monkeypatch):

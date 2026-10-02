@@ -19,6 +19,7 @@ from auth import TENANT_ID, exchange_code, get_auth_url, REDIRECT_URI
 from gs1_export.pipeline import (
     PipelineError,
     export_batch,
+    get_article_changes as gs1_get_article_changes,
     get_changed_articles,
     get_export_file,
     list_export_files,
@@ -210,6 +211,20 @@ async def gs1_changed_articles(request: Request):
         logger.error("GS1 CHANGED-ARTICLES ERROR | %s", exc)
         return JSONResponse({"articles": [], "error": str(exc)}, status_code=502)
     return JSONResponse({"articles": articles})
+
+
+@app.get("/gs1/changed-articles/{matnr}/details")
+async def gs1_changed_article_details(request: Request, matnr: str):
+    """Value-level changes of one article since its last GS1 export - loaded on
+    demand when the user expands an article (rebuilding it takes ~1 s)."""
+    if "gs1" not in request.session.get("user", {}).get("roles", []):
+        return JSONResponse({"changes": None}, status_code=403)
+    try:
+        changes = gs1_get_article_changes(matnr)
+    except PipelineError as exc:
+        logger.error("GS1 CHANGE DETAILS ERROR | %s | %s", matnr, exc)
+        return JSONResponse({"changes": None, "error": str(exc)}, status_code=502)
+    return JSONResponse({"changes": changes})
 
 
 @app.get("/gs1/files")
