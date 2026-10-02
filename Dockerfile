@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py auth.py parser.py validator.py json_builder.py sender.py ./
 COPY templates/ templates/
 COPY gs1_export/ gs1_export/
+COPY etim10_export/ etim10_export/
 
 # Non-root user for security
 RUN adduser --disabled-password --gecos "" appuser && chown -R appuser /app
