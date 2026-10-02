@@ -122,3 +122,19 @@ def test_invalid_crosswalk_default_is_dropped_silently(rules):
     features, warnings = compute_features(_product(ZZGHFAR="ZZGHFAR_UNKNOWN"), CLASS, rules, "4711")
     assert "EF000136" not in {f["feature_id"] for f in features}
     assert not any("EF000136" in w for w in warnings)
+
+
+def test_diff_features_reports_added_changed_removed(rules):
+    from etim10_export.pipeline import diff_features
+
+    rules.feature_names.update({"EF000187": "Voltage type", "EF012154": "Dimming DALI", "EF000004": "Protection class"})
+    rules.value_names.update({"EV000460": "AC", "EV000583": "II"})
+    old = {"class_id": CLASS, "features": {"EF000187": ["EV000460"], "EF012154": ["false"], "EF000004": ["EV000583"]}}
+    new = {"class_id": CLASS, "features": {"EF000187": ["EV000460"], "EF012154": ["true"], "EF000015": ["90"]}}
+    changes = diff_features(old, new, rules)
+    assert [(c["kind"], c["feature_id"], c["old"], c["new"]) for c in changes] == [
+        ("removed", "EF000004", "II", None),
+        ("added", "EF000015", None, "90"),
+        ("changed", "EF012154", "false", "true"),
+    ]
+    assert diff_features(old, old, rules) == []

@@ -105,6 +105,38 @@
   </div>
   {% endif %}
 
+  {% if 'etim' in roles %}
+  <div id="etimChangedPanel" class="alert alert-warning d-none mb-4">
+    <div class="d-flex align-items-start gap-2">
+      <i class="bi bi-exclamation-triangle-fill fs-5 mt-1"></i>
+      <div class="flex-grow-1">
+        <strong id="etimChangedTitle"></strong>
+        <div id="etimChangedList" class="small mt-2"></div>
+        <div class="text-muted small mt-1">Artikelnummern in einer neuen Datei hochladen, um die ETIM10-Datei für diese Artikel neu zu erzeugen.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="etimFilesPanel" class="card section-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#etimFilesBody">
+      <span><i class="bi bi-clock-history me-2"></i>Meine bisherigen ETIM10-Exporte <span id="etimFilesCount" class="badge bg-secondary ms-1"></span></span>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="etimFilesBody" class="collapse">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+              <tr><th>Datum</th><th>Artikel</th><th>Datei</th><th></th></tr>
+            </thead>
+            <tbody id="etimFilesTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <form id="mainForm" novalidate autocomplete="off">
 
     <!-- ================================================================
@@ -745,7 +777,7 @@ async function handleGs1Download(resp) {
       </div>
     </div>`;
 
-  loadGs1Files();
+  if (filename.startsWith('etim10')) loadEtimFiles(); else loadGs1Files();
 }
 
 /* =========================================================
@@ -1035,6 +1067,77 @@ async function loadGs1Files() {
   }
 }
 loadGs1Files();
+
+/* =========================================================
+   ETIM10: Artikel mit geänderten Merkmalen seit dem letzten Export
+   ========================================================= */
+const ETIM_CHANGE_LABELS = { added: 'neu', removed: 'entfällt', changed: 'geändert', class: 'Klasse' };
+
+function etimChangeText(c) {
+  const name = escHtml(c.name || c.feature_id || '');
+  if (c.kind === 'added')   return `<span class="badge bg-success me-1">neu</span>${name}: <strong>${escHtml(c.new)}</strong>`;
+  if (c.kind === 'removed') return `<span class="badge bg-secondary me-1">entfällt</span>${name} (bisher: ${escHtml(c.old)})`;
+  return `<span class="badge bg-warning text-dark me-1">${ETIM_CHANGE_LABELS[c.kind] || 'geändert'}</span>${name}: ${escHtml(c.old)} → <strong>${escHtml(c.new)}</strong>`;
+}
+
+async function loadEtimChangedArticles() {
+  const panel = document.getElementById('etimChangedPanel');
+  if (!panel) return; // Nutzer hat keine ETIM-Rolle
+  try {
+    const resp = await fetch('/etim10/changed-articles');
+    if (!resp.ok) return;
+    const articles = (await resp.json()).articles || [];
+    if (articles.length === 0) return;
+
+    document.getElementById('etimChangedTitle').textContent =
+      `${articles.length} Artikel haben seit dem letzten ETIM10-Export geänderte Merkmale:`;
+    document.getElementById('etimChangedList').innerHTML = articles.map(a => `
+      <details class="mb-1">
+        <summary><code>${escHtml(a.matnr)}</code> – ${a.changes.length} Änderung(en)
+          <span class="text-muted">(Export ${a.exported_at ? new Date(a.exported_at).toLocaleDateString('de-DE') : ''})</span></summary>
+        <ul class="mb-1">${a.changes.map(c => `<li>${etimChangeText(c)}</li>`).join('')}</ul>
+      </details>`).join('');
+    panel.classList.remove('d-none');
+  } catch (e) {
+    // Hintergrund-Check, Fehler stören die Seite nicht
+  }
+}
+loadEtimChangedArticles();
+
+/* =========================================================
+   ETIM10: Übersicht bisher generierter Dateien (pro User)
+   ========================================================= */
+async function loadEtimFiles() {
+  const panel = document.getElementById('etimFilesPanel');
+  if (!panel) return;
+  try {
+    const resp = await fetch('/etim10/files');
+    if (!resp.ok) return;
+    const files = (await resp.json()).files || [];
+    if (files.length === 0) return;
+
+    document.getElementById('etimFilesCount').textContent = files.length;
+    document.getElementById('etimFilesTableBody').innerHTML = files.map(f => {
+      const date = f.exported_at ? new Date(f.exported_at).toLocaleString('de-DE') : '';
+      const matnrPreview = (f.matnrs || []).slice(0, 3).map(escHtml).join(', ')
+        + ((f.matnrs || []).length > 3 ? ', …' : '');
+      return `<tr>
+        <td class="text-nowrap">${date}</td>
+        <td>${f.article_count} <span class="text-muted small">(${matnrPreview})</span></td>
+        <td><code>${escHtml(f.filename)}</code></td>
+        <td class="text-end">
+          <a href="/etim10/files/${f.id}/download" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-download me-1"></i>Download
+          </a>
+        </td>
+      </tr>`;
+    }).join('');
+    panel.classList.remove('d-none');
+  } catch (e) {
+    // Hintergrund-Ladevorgang, Fehler stören die Seite nicht
+  }
+}
+loadEtimFiles();
 </script>
 </body>
 </html>

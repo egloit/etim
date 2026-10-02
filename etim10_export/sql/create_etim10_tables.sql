@@ -106,7 +106,8 @@ CREATE TABLE public.etim10_export_history (
     class_id                VARCHAR(10),
     exported_at             TIMESTAMPTZ NOT NULL,
     pim_updated_at_export   VARCHAR,
-    exported_by             TEXT
+    exported_by             TEXT,
+    feature_snapshot        JSONB           -- {"class_id": .., "features": {EF..: [values]}} at export time
 );
 
 CREATE TABLE public.etim10_export_files (

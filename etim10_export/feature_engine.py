@@ -24,6 +24,7 @@ class RuleSet:
     model_features: dict[tuple[str, str], dict]          # (class, feature) -> {type, unit}
     allowed_values: dict[tuple[str, str], set[str]]      # (class, feature) -> {EV...}
     feature_names: dict[str, str] = field(default_factory=dict)
+    value_names: dict[str, str] = field(default_factory=dict)        # EV.. -> description
 
     def pim_fields(self) -> set[str]:
         """All PIM attributes the active rules read (plus ZZTYPEN for the class)."""
@@ -88,8 +89,11 @@ class RuleSet:
             )
             feature_names = dict(cur.fetchall())
 
+            cur.execute("SELECT value_id, description FROM public.etim10_model_value")
+            value_names = dict(cur.fetchall())
+
         return cls(class_by_zztyp, dict(rules_by_class), dict(crosswalk), model_features,
-                   dict(allowed_values), feature_names)
+                   dict(allowed_values), feature_names, value_names)
 
 
 def _format_number(value) -> str:

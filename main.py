@@ -26,6 +26,9 @@ from gs1_export.pipeline import (
 )
 from etim10_export.pipeline import PipelineError as Etim10PipelineError
 from etim10_export.pipeline import export_batch as etim10_export_batch
+from etim10_export.pipeline import get_changed_articles as etim10_get_changed_articles
+from etim10_export.pipeline import get_export_file as etim10_get_export_file
+from etim10_export.pipeline import list_export_files as etim10_list_export_files
 from etim10_export.pipeline import save_export_file as etim10_save_export_file
 from json_builder import build_json
 from parser import parse_file
@@ -236,6 +239,59 @@ async def gs1_file_download(request: Request, file_id: int):
         return JSONResponse({"success": False, "errors": [{"field": "GS1-Datei", "message": str(exc), "row": None}]}, status_code=502)
     if file is None:
         return JSONResponse({"success": False, "errors": [{"field": "GS1-Datei", "message": "Datei nicht gefunden.", "row": None}]}, status_code=404)
+    return Response(
+        content=file["xml_content"],
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{file["filename"]}"'},
+    )
+
+
+def _etim_user(request: Request) -> Optional[str]:
+    user = request.session.get("user", {})
+    return user.get("email") if "etim" in user.get("roles", []) else None
+
+
+@app.get("/etim10/changed-articles")
+async def etim10_changed_articles(request: Request):
+    """Previously exported articles whose ETIM features differ from the last
+    export - feature by feature (added / changed / removed), see
+    etim10_export.pipeline.get_changed_articles."""
+    if not _etim_user(request) or not ETIM10_DIRECT_EXPORT:
+        return JSONResponse({"articles": []})
+    try:
+        articles = etim10_get_changed_articles()
+    except Etim10PipelineError as exc:
+        logger.error("ETIM10 CHANGED-ARTICLES ERROR | %s", exc)
+        return JSONResponse({"articles": [], "error": str(exc)}, status_code=502)
+    return JSONResponse({"articles": articles})
+
+
+@app.get("/etim10/files")
+async def etim10_files(request: Request):
+    """Previously generated ETIM10 BMEcat files of the logged-in user, newest first."""
+    user_email = _etim_user(request)
+    if not user_email:
+        return JSONResponse({"files": []})
+    try:
+        files = etim10_list_export_files(user_email)
+    except Etim10PipelineError as exc:
+        logger.error("ETIM10 FILES ERROR | %s", exc)
+        return JSONResponse({"files": [], "error": str(exc)}, status_code=502)
+    return JSONResponse({"files": files})
+
+
+@app.get("/etim10/files/{file_id}/download")
+async def etim10_file_download(request: Request, file_id: int):
+    user_email = _etim_user(request)
+    if not user_email:
+        return JSONResponse({"success": False, "errors": [{"field": "ETIM10-Datei", "message": "Kein Zugriff.", "row": None}]}, status_code=403)
+    try:
+        file = etim10_get_export_file(file_id, user_email)
+    except Etim10PipelineError as exc:
+        logger.error("ETIM10 FILE DOWNLOAD ERROR | %s", exc)
+        return JSONResponse({"success": False, "errors": [{"field": "ETIM10-Datei", "message": str(exc), "row": None}]}, status_code=502)
+    if file is None:
+        return JSONResponse({"success": False, "errors": [{"field": "ETIM10-Datei", "message": "Datei nicht gefunden.", "row": None}]}, status_code=404)
     return Response(
         content=file["xml_content"],
         media_type="application/xml",

@@ -27,6 +27,7 @@ from typing import Optional
 
 import httpx
 import psycopg
+from psycopg.types.json import Jsonb
 from dotenv import load_dotenv
 
 from gs1_export import database, pim_reader, sap_database
@@ -318,7 +319,8 @@ def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: st
                         "assets": assets.get(matnr, {}), "eprel": eprel.get(matnr, {}),
                         "price_row": price_rows.get(matnr), "datasheet_ok": datasheet_ok.get(matnr)}
                 products.append(_build_product(matnr, product, languages, rules, data, warnings))
-                history.append((matnr, products[-1].get("class_id"), product.get("updated"), exported_by))
+                history.append((matnr, products[-1].get("class_id"), product.get("updated"), exported_by,
+                                Jsonb(_snapshot(products[-1]))))
             upsert_history(pg, history)
     except psycopg.Error as exc:
         raise PipelineError(f"Datenbankfehler: {exc}") from exc
@@ -365,18 +367,129 @@ def _is_missing_price_error(error: dict) -> bool:
     return "PRODUCT_PRICE_DETAILS': Missing child element" in error["message"]
 
 
+def _snapshot(product: dict) -> dict:
+    """What the file contained for this article - compared later by get_changed_articles()."""
+    return {"class_id": product.get("class_id"),
+            "features": {f["feature_id"]: f["values"] for f in product.get("features", [])}}
+
+
 def upsert_history(conn, rows: list[tuple]) -> None:
-    """rows: (matnr, class_id, pim_updated_at, exported_by)"""
+    """rows: (matnr, class_id, pim_updated_at, exported_by, feature_snapshot)"""
     with conn.cursor() as cur:
         cur.executemany(
             """
-            INSERT INTO public.etim10_export_history (matnr, class_id, exported_at, pim_updated_at_export, exported_by)
-            VALUES (%s, %s, now(), %s, %s)
+            INSERT INTO public.etim10_export_history
+                (matnr, class_id, exported_at, pim_updated_at_export, exported_by, feature_snapshot)
+            VALUES (%s, %s, now(), %s, %s, %s)
             ON CONFLICT (matnr) DO UPDATE SET class_id = EXCLUDED.class_id, exported_at = EXCLUDED.exported_at,
-                pim_updated_at_export = EXCLUDED.pim_updated_at_export, exported_by = EXCLUDED.exported_by
+                pim_updated_at_export = EXCLUDED.pim_updated_at_export, exported_by = EXCLUDED.exported_by,
+                feature_snapshot = EXCLUDED.feature_snapshot
             """,
             rows,
         )
+
+
+def _display(values: list[str], rules: RuleSet) -> str:
+    return " – ".join(rules.value_names.get(v, v) for v in values)
+
+
+def diff_features(old: dict, new: dict, rules: RuleSet) -> list[dict]:
+    """Feature-level changes between two snapshots ({"class_id", "features"})."""
+    changes = []
+    if old.get("class_id") != new.get("class_id"):
+        changes.append({"kind": "class", "feature_id": None, "name": "ETIM-Klasse",
+                        "old": old.get("class_id"), "new": new.get("class_id")})
+    old_f, new_f = old.get("features", {}), new.get("features", {})
+    for fid in sorted(set(old_f) | set(new_f)):
+        before, after = old_f.get(fid), new_f.get(fid)
+        if before == after:
+            continue
+        kind = "added" if before is None else "removed" if after is None else "changed"
+        changes.append({"kind": kind, "feature_id": fid, "name": rules.feature_names.get(fid, fid),
+                        "old": _display(before, rules) if before else None,
+                        "new": _display(after, rules) if after else None})
+    return changes
+
+
+_CHANGED_LIMIT = 500
+
+
+def get_changed_articles() -> list[dict]:
+    """Previously exported articles whose ETIM features differ from what the
+    last export contained - recomputed for articles whose PIM "updated"
+    timestamp moved. Articles whose PIM change doesn't affect any ETIM feature
+    are not listed. Newest PIM change first, at most _CHANGED_LIMIT checked."""
+    try:
+        conn = database.get_connection()
+    except Exception as exc:
+        raise PipelineError(f"Datenbankverbindung fehlgeschlagen: {exc}") from exc
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT h.matnr, h.exported_at, h.feature_snapshot, latest.updated
+                FROM public.etim10_export_history h
+                JOIN LATERAL (
+                    SELECT updated FROM public.pim_egloakeneo_product p
+                    WHERE p.matnr = h.matnr AND p.enabled = TRUE ORDER BY p.updated DESC LIMIT 1
+                ) latest ON TRUE
+                WHERE latest.updated IS DISTINCT FROM h.pim_updated_at_export AND h.feature_snapshot IS NOT NULL
+                ORDER BY latest.updated DESC
+                LIMIT %s
+                """,
+                (_CHANGED_LIMIT,),
+            )
+            candidates = cur.fetchall()
+        if not candidates:
+            return []
+        rules = RuleSet.load(conn)
+        products = sources.get_products(conn, [c[0] for c in candidates], rules.pim_fields())
+    finally:
+        conn.close()
+
+    changed = []
+    for matnr, exported_at, snapshot, pim_updated in candidates:
+        product = products.get(matnr)
+        if not product:
+            continue
+        class_id = rules.class_by_zztyp.get(pim_reader.get_zztypen_code(product) or "")
+        features = compute_features(product, class_id, rules, matnr)[0] if class_id else []
+        current = {"class_id": class_id, "features": {f["feature_id"]: f["values"] for f in features}}
+        changes = diff_features(snapshot, current, rules)
+        if changes:
+            changed.append({"matnr": matnr, "exported_at": exported_at.isoformat() if exported_at else None,
+                            "pim_updated_now": pim_updated, "changes": changes})
+    return changed
+
+
+def list_export_files(exported_by: str) -> list[dict]:
+    """Files previously generated by *exported_by*, newest first (without content)."""
+    try:
+        with database.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, filename, exported_at, article_count, matnrs FROM public.etim10_export_files
+                WHERE exported_by = %s ORDER BY exported_at DESC
+                """,
+                (exported_by,),
+            ).fetchall()
+    except Exception as exc:
+        raise PipelineError(f"Datenbankfehler: {exc}") from exc
+    return [{"id": r[0], "filename": r[1], "exported_at": r[2].isoformat() if r[2] else None,
+             "article_count": r[3], "matnrs": r[4]} for r in rows]
+
+
+def get_export_file(file_id: int, exported_by: str) -> Optional[dict]:
+    """A stored file, only for the user who generated it (ids of other users can't be guessed)."""
+    try:
+        with database.get_connection() as conn:
+            row = conn.execute(
+                "SELECT filename, xml_content FROM public.etim10_export_files WHERE id = %s AND exported_by = %s",
+                (file_id, exported_by),
+            ).fetchone()
+    except Exception as exc:
+        raise PipelineError(f"Datenbankfehler: {exc}") from exc
+    return {"filename": row[0], "xml_content": bytes(row[1])} if row else None
 
 
 def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str], xml_bytes: bytes) -> None:
