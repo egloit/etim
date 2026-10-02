@@ -290,10 +290,13 @@ def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: st
             with ThreadPoolExecutor(max_workers=16) as pool:
                 datasheet_ok = dict(zip(urls, pool.map(_datasheet_ok, urls.values())))
 
+        # Only the attributes the export reads (rules + texts/keywords/flags).
+        pim_fields = rules.pim_fields() | {"MAKTX", "PIM_ARTIKELTEXT", "ZZSER", "ZZAKKJN", "qc_symbol",
+                                           *_KEYWORD_FIELDS}
         products = []
         for start in range(0, len(unique_matnrs), _CHUNK):
             chunk = unique_matnrs[start:start + _CHUNK]
-            pim = sources.get_products(pg, chunk)
+            pim = sources.get_products(pg, chunk, pim_fields)
             assets = sources.get_dam_assets(pg, chunk)
             eprel = sources.get_eprel_links(pg, chunk)
             mara = sources.get_mara_packaging(hana, chunk) if hana else {}
@@ -334,7 +337,28 @@ def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: st
     if without_price:
         warnings.insert(0, f"{len(without_price)} Artikel ohne Preis – Preisblock nur mit Datum (wie bisher "
                            f"im Lobster, laut XSD unvollständig).")
-    return xml_bytes, warnings, [e for e in errors if not _is_missing_price_error(e)]
+    return xml_bytes, group_warnings(warnings), [e for e in errors if not _is_missing_price_error(e)]
+
+
+def group_warnings(warnings: list[str], examples: int = 10) -> list[str]:
+    """Collapse per-article warnings ("<matnr>: <text>") with the same text into
+    one line per cause, most frequent first: "<text> – 1545 Artikel (z. B. 30658,
+    44131, …)". Warnings without article prefix are kept as they are, on top."""
+    general, by_text = [], {}
+    for warning in warnings:
+        matnr, sep, text = warning.partition(": ")
+        if not sep or " " in matnr:
+            general.append(warning)
+            continue
+        by_text.setdefault(text, []).append(matnr)
+    grouped = []
+    for text, matnrs in sorted(by_text.items(), key=lambda kv: -len(kv[1])):
+        if len(matnrs) == 1:
+            grouped.append(f"{matnrs[0]}: {text}")
+            continue
+        sample = ", ".join(matnrs[:examples]) + (", …" if len(matnrs) > examples else "")
+        grouped.append(f"{text.rstrip('.')} – {len(matnrs)} Artikel (z. B. {sample})")
+    return general + grouped
 
 
 def _is_missing_price_error(error: dict) -> bool:

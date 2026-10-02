@@ -4,7 +4,7 @@ from lxml import etree
 
 from etim10_export import validator
 from etim10_export.bmecat_builder import NS, build_document, format_decimal
-from etim10_export.pipeline import _is_missing_price_error, _packaging, _prices
+from etim10_export.pipeline import _is_missing_price_error, _packaging, _prices, group_warnings
 
 HEADER = {
     "generator_info": "test",
@@ -107,3 +107,15 @@ def test_document_without_price_keeps_date_only_price_block():
     errors = validator.validate_xml(xml)
     assert len(errors) == 1 and errors[0]["matnr"] == "902778"
     assert _is_missing_price_error(errors[0])
+
+
+def test_group_warnings_collapses_repeated_causes():
+    warnings = ["3 Artikel ohne Preis – Preisblock nur mit Datum.",
+                "1: EF004282 (Light outlet): Wert 'EV003775' ist für EC001744 nicht zulässig – ausgelassen.",
+                "2: EF004282 (Light outlet): Wert 'EV003775' ist für EC001744 nicht zulässig – ausgelassen.",
+                "6EX08-EFRO-BLN: Zolltarifnummer in SAP (MARC, Werk 0090) leer."]
+    assert group_warnings(warnings) == [
+        "3 Artikel ohne Preis – Preisblock nur mit Datum.",
+        "EF004282 (Light outlet): Wert 'EV003775' ist für EC001744 nicht zulässig – ausgelassen – 2 Artikel (z. B. 1, 2)",
+        "6EX08-EFRO-BLN: Zolltarifnummer in SAP (MARC, Werk 0090) leer.",
+    ]

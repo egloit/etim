@@ -1,4 +1,5 @@
 """XSD validation of the generated BMEcat against bmecat_etim_501.xsd (shipped in schema/)."""
+from bisect import bisect_right
 from functools import lru_cache
 from pathlib import Path
 
@@ -19,14 +20,13 @@ def validate_xml(xml_bytes: bytes) -> list[dict]:
     doc = etree.fromstring(xml_bytes)
     if schema.validate(doc):
         return []
+    # PRODUCT start lines -> SUPPLIER_PID, to attribute each error to its article in one pass.
+    ns = doc.nsmap[None]
+    starts = sorted((p.sourceline, p.findtext(f"{{{ns}}}SUPPLIER_PID")) for p in doc.iter(f"{{{ns}}}PRODUCT"))
+    lines = [line for line, _ in starts]
     errors = []
     for err in schema.error_log:
-        matnr = None
-        for el in doc.iter():
-            if el.sourceline == err.line:
-                product = next((a for a in el.iterancestors() if a.tag.endswith("}PRODUCT")), None)
-                if product is not None:
-                    matnr = product.findtext(f"{{{product.nsmap[None]}}}SUPPLIER_PID")
-                break
+        i = bisect_right(lines, err.line) - 1
+        matnr = starts[i][1] if i >= 0 else None
         errors.append({"matnr": matnr, "gtin": None, "element": err.path, "message": err.message, "pickid": None})
     return errors

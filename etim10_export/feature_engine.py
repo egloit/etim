@@ -25,6 +25,14 @@ class RuleSet:
     allowed_values: dict[tuple[str, str], set[str]]      # (class, feature) -> {EV...}
     feature_names: dict[str, str] = field(default_factory=dict)
 
+    def pim_fields(self) -> set[str]:
+        """All PIM attributes the active rules read (plus ZZTYPEN for the class)."""
+        fields = {"ZZTYPEN"}
+        for rules in self.rules_by_class.values():
+            for rule in rules:
+                fields.update(f for f in (rule["pim_field"], rule["required_pim_field"]) if f)
+        return fields
+
     @classmethod
     def load(cls, conn: psycopg.Connection) -> "RuleSet":
         with conn.cursor() as cur:
@@ -135,54 +143,64 @@ def _apply_transform(value: str, transform: Optional[str]) -> str:
     return value
 
 
-def _evaluate(rule: dict, product: dict, crosswalk: dict[str, dict[str, str]]) -> str:
+def _evaluate(rule: dict, product: dict, crosswalk: dict[str, dict[str, str]]) -> tuple[str, bool]:
+    """(value, from_config): from_config is True when the value doesn't come from
+    the article's PIM data but from the rule itself (fix value or crosswalk
+    default '*')."""
     if rule["required_pim_field"] and not _raw_values(product, rule["required_pim_field"]):
-        return ""
+        return "", False
     source = rule["source_type"]
     if source == "fix":
-        return rule["fix_value"]
+        return rule["fix_value"], True
     values = _raw_values(product, rule["pim_field"])
     if source == "copy":
-        return _apply_transform(values[0], rule["transform"]) if values else ""
+        return (_apply_transform(values[0], rule["transform"]) if values else ""), False
     table = crosswalk.get(rule["crosswalk_set"], {})
     for code in values or [""]:
         if code in table:
-            return table[code]
-    return table.get("*", "")
+            return table[code], False
+    return table.get("*", ""), True
 
 
 def compute_raw(product: dict, class_id: str, rules: RuleSet) -> dict[str, dict[str, str]]:
-    """Rule output before the model check: {feature_id: {'value': .., 'value2': ..}}.
-    Several rules for the same feature/slot: first non-empty one (by sort_order) wins."""
-    result: dict[str, dict[str, str]] = defaultdict(dict)
+    """Rule output before the model check: {feature_id: {'value': .., 'value2': ..,
+    'value_from_config': bool}}. Several rules for the same feature/slot: first
+    non-empty one (by sort_order) wins."""
+    result: dict[str, dict] = defaultdict(dict)
     for rule in rules.rules_by_class.get(class_id, []):
         slot = result[rule["feature_id"]]
         if slot.get(rule["slot"], "") not in EMPTY_VALUES:
             continue
-        slot[rule["slot"]] = _evaluate(rule, product, rules.crosswalk)
+        slot[rule["slot"]], slot[f"{rule['slot']}_from_config"] = _evaluate(rule, product, rules.crosswalk)
     return dict(result)
 
 
 def compute_features(product: dict, class_id: str, rules: RuleSet, matnr: str = "") -> tuple[list[dict], list[str]]:
     """Validated features for the BMEcat file, sorted by feature id:
     [{'feature_id', 'values': [v] or [min, max], 'unit_id'}], plus warnings for
-    values dropped because ETIM 10 doesn't allow them."""
+    PIM values dropped because ETIM 10 doesn't allow them. Invalid values that
+    come from the rule configuration (fix value / crosswalk default, e.g.
+    'sonstige' where the class doesn't allow it) are dropped silently - they say
+    nothing about the article and would repeat for every article of the class."""
     features, warnings = [], []
     for feature_id, slots in sorted(compute_raw(product, class_id, rules).items()):
         value = (slots.get("value") or "").strip()
         value2 = (slots.get("value2") or "").strip()
         if value in EMPTY_VALUES:
             continue
+        from_config = slots.get("value_from_config", False)
         model = rules.model_features.get((class_id, feature_id))
         prefix = f"{matnr}: {feature_id}"
         if model is None:
-            warnings.append(f"{prefix} gehört in ETIM 10 nicht zur Klasse {class_id} – ausgelassen.")
+            if not from_config:
+                warnings.append(f"{prefix} gehört in ETIM 10 nicht zur Klasse {class_id} – ausgelassen.")
             continue
         ftype = model["type"]
         if ftype == "A":
             if value not in rules.allowed_values.get((class_id, feature_id), set()):
-                warnings.append(f"{prefix} ({rules.feature_names.get(feature_id, '')}): Wert '{value}' "
-                                f"ist für {class_id} nicht zulässig – ausgelassen.")
+                if not from_config:
+                    warnings.append(f"{prefix} ({rules.feature_names.get(feature_id, '')}): Wert '{value}' "
+                                    f"ist für {class_id} nicht zulässig – ausgelassen.")
                 continue
             values = [value]
         elif ftype == "L":

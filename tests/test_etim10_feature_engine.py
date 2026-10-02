@@ -43,11 +43,13 @@ def rules():
             _rule("EF000280", "copy", slot="value2", pim_field="PIM_MAX_POWER"),
             _rule("EF009347", "copy", pim_field="PIM_MAX_POWER", transform="substring_after:="),
             _rule("EF005905", "fix", fix_value="true", required_pim_field="PIM_FAS_07_1"),
-            _rule("EF000136", "fix", fix_value="EV999999"),
+            _rule("EF000136", "crosswalk", pim_field="ZZGHFAR", crosswalk_set="farbe"),
+            _rule("EF008157", "fix", fix_value="EV000154"),
         ]},
         crosswalk={
             "netz": {"ZZNETZS_01": "EV000460"},
             "dali": {"PIM_dimmable_with_DALI": "true", "*": "false"},
+            "farbe": {"ZZGHFAR_X": "EV999999", "*": "EV000154"},
         },
         model_features={
             (CLASS, "EF000187"): {"type": "A", "unit": None},
@@ -57,6 +59,7 @@ def rules():
             (CLASS, "EF000280"): {"type": "R", "unit": "EU570054"},
             (CLASS, "EF005905"): {"type": "L", "unit": None},
             (CLASS, "EF000136"): {"type": "A", "unit": None},
+            (CLASS, "EF008157"): {"type": "A", "unit": None},
         },
         allowed_values={(CLASS, "EF000187"): {"EV000460"}, (CLASS, "EF000004"): {"EV000583"},
                         (CLASS, "EF000136"): {"EV000202"}},
@@ -95,7 +98,8 @@ def test_substring_after_transform(rules):
 
 
 def test_compute_features_validates_against_model(rules):
-    product = _product(ZZNETZS="ZZNETZS_01", ZZLMDUR=90, PIM_FAS_05_1="5,4", PIM_MAX_POWER="14W")
+    product = _product(ZZNETZS="ZZNETZS_01", ZZLMDUR=90, PIM_FAS_05_1="5,4", PIM_MAX_POWER="14W",
+                       ZZGHFAR="ZZGHFAR_X")
     features, warnings = compute_features(product, CLASS, rules, "4711")
     by_id = {f["feature_id"]: f for f in features}
 
@@ -104,8 +108,17 @@ def test_compute_features_validates_against_model(rules):
     # range: min/max from value/value2, numbers read like GS1 does ('5,4' -> 5.4, '14W' -> 14)
     assert by_id["EF000280"]["values"] == ["5.4", "14"]
     assert by_id["EF012154"]["values"] == ["false"]
-    # EV999999 isn't an allowed value for EF000136 -> dropped with a warning
+    # EV999999 (from the article's PIM value) isn't allowed for EF000136 -> dropped with a warning
     assert "EF000136" not in by_id
     assert any("EF000136" in w for w in warnings)
+    # an invalid fix value comes from the rule, not the article -> dropped silently
+    assert "EF008157" not in by_id
+    assert not any("EF008157" in w for w in warnings)
     # EF009347 has no model entry for the class -> dropped
     assert "EF009347" not in by_id
+
+
+def test_invalid_crosswalk_default_is_dropped_silently(rules):
+    features, warnings = compute_features(_product(ZZGHFAR="ZZGHFAR_UNKNOWN"), CLASS, rules, "4711")
+    assert "EF000136" not in {f["feature_id"] for f in features}
+    assert not any("EF000136" in w for w in warnings)

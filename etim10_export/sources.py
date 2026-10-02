@@ -35,16 +35,32 @@ PRICE_COLUMNS = ("currency", "VatRatePercentage", "SuggestedRetailPriceIncluding
 
 # ---------- PostgreSQL ----------
 
-def get_products(conn: psycopg.Connection, matnrs: list[str]) -> dict[str, dict]:
-    """PIM JSON per matnr (newest enabled row, same rule as gs1_export.database)."""
+def get_products(conn: psycopg.Connection, matnrs: list[str], fields: Optional[set[str]] = None) -> dict[str, dict]:
+    """PIM JSON per matnr (newest enabled row, same rule as gs1_export.database).
+    With *fields*, only those attributes of "values" (case-insensitive) are
+    transferred - the full JSON is ~290 KB per article."""
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT DISTINCT ON (matnr) matnr, "json" FROM public.pim_egloakeneo_product
-            WHERE matnr = ANY(%s) AND enabled = TRUE ORDER BY matnr, updated DESC
-            """,
-            (matnrs,),
-        )
+        if fields is None:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (matnr) matnr, "json" FROM public.pim_egloakeneo_product
+                WHERE matnr = ANY(%s) AND enabled = TRUE ORDER BY matnr, updated DESC
+                """,
+                (matnrs,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (p.matnr) p.matnr,
+                       CASE WHEN p."json" IS NULL THEN NULL ELSE jsonb_build_object(
+                           'updated', p."json"->'updated',
+                           'values', COALESCE((SELECT jsonb_object_agg(k, v) FROM jsonb_each(p."json"->'values') AS e(k, v)
+                                               WHERE lower(k) = ANY(%s)), '{}'::jsonb)) END
+                FROM public.pim_egloakeneo_product p
+                WHERE p.matnr = ANY(%s) AND p.enabled = TRUE ORDER BY p.matnr, p.updated DESC
+                """,
+                (sorted(f.lower() for f in fields), matnrs),
+            )
         return dict(cur.fetchall())
 
 
