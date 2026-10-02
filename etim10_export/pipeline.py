@@ -98,7 +98,11 @@ def _volume_m3(value, unit: str) -> Optional[str]:
     return bmecat_builder.format_decimal(float(value) * factor, 6)
 
 
-def _labels(product: dict, field: str, locale: str) -> list[str]:
+def _locales(language: dict) -> list[str]:
+    return [language["pim_locale"], *language.get("pim_fallback", [])]
+
+
+def _labels(product: dict, field: str, locales: list[str]) -> list[str]:
     entries = pim_reader._find_entries(product, field)
     if not entries:
         return []
@@ -110,16 +114,16 @@ def _labels(product: dict, field: str, locale: str) -> list[str]:
         if code in _KEYWORD_SKIP_CODES:
             continue
         labels = (linked.get(code) or {}).get("labels", {}) if isinstance(data, list) else linked.get("labels", {})
-        label = _LABEL_PREFIX.sub("", (labels.get(locale) or "").strip())
+        label = _LABEL_PREFIX.sub("", next((labels[l] for l in locales if labels.get(l)), "").strip())
         if label and label != "-":
             out.append(label)
     return out
 
 
-def _text(product: dict, field: str, locale: str) -> Optional[str]:
-    value = pim_reader.get_pim_value(product, field)
-    text = (value or {}).get("translations", {}).get(locale) if value else None
-    return text.strip() if text and text.strip() else None
+def _text(product: dict, field: str, locales: list[str]) -> Optional[str]:
+    """First non-empty translation in *locales* order."""
+    translations = (pim_reader.get_pim_value(product, field) or {}).get("translations", {})
+    return next((t.strip() for l in locales if (t := translations.get(l)) and t.strip()), None)
 
 
 def _datasheet_ok(url: str) -> bool:
@@ -175,15 +179,15 @@ def _build_product(matnr: str, product: dict, languages: list[dict], rules: Rule
     first = languages[0]
     p: dict = {"matnr": matnr, "price_date": date.today().isoformat()}
 
-    p["descriptions_short"] = {l["bmecat"]: t for l in languages if (t := _text(product, "MAKTX", l["pim_locale"]))}
+    p["descriptions_short"] = {l["bmecat"]: t for l in languages if (t := _text(product, "MAKTX", _locales(l)))}
     if not p["descriptions_short"]:
-        fallback = _text(product, "MAKTX", "de_DE") or matnr
+        fallback = _text(product, "MAKTX", ["de_DE"]) or matnr
         p["descriptions_short"] = {first["bmecat"]: fallback}
         warnings.append(f"{matnr}: kein Materialkurztext (MAKTX) in den gewählten Sprachen – Fallback verwendet.")
     p["descriptions_long"] = {l["bmecat"]: t for l in languages
-                              if (t := _text(product, "PIM_ARTIKELTEXT", l["pim_locale"]))}
+                              if (t := _text(product, "PIM_ARTIKELTEXT", _locales(l)))}
     p["keywords"] = {l["bmecat"]: words for l in languages
-                     if (words := [w for f in _KEYWORD_FIELDS for w in _labels(product, f, l["pim_locale"])])}
+                     if (words := [w for f in _KEYWORD_FIELDS for w in _labels(product, f, _locales(l))])}
 
     p["class_id"] = rules.class_by_zztyp[pim_reader.get_zztypen_code(product) or ""]
     p["features"], feature_warnings = compute_features(product, p["class_id"], rules, matnr)
@@ -204,10 +208,14 @@ def _build_product(matnr: str, product: dict, languages: list[dict], rules: Rule
         warnings.append(f"{matnr}: EAN11 im SAP-Materialstamm ist leer.")
     p["pieces_per_box"], p["packing_unit"], p["logistic"] = _packaging(mara)
 
-    origin = data["origin"]
-    if origin:
-        p["customs_number"] = origin["customs_number"] or None
-        p["country_of_origin"] = origin["country_of_origin"] or None
+    origin = data["origin"] or {}
+    p["customs_number"] = origin.get("customs_number") or None
+    p["country_of_origin"] = origin.get("country_of_origin") or None
+    if hana and data["werks"]:
+        missing = [name for key, name in (("customs_number", "Zolltarifnummer"), ("country_of_origin", "Ursprungsland"))
+                   if not p[key]]
+        if missing:
+            warnings.append(f"{matnr}: {' und '.join(missing)} in SAP (MARC, Werk {data['werks']}) leer.")
 
     p["prices"] = _prices(data["price_row"])
 
@@ -303,7 +311,7 @@ def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: st
                     continue
                 if preise in ("csv", "sap") and not _prices(price_rows.get(matnr)):
                     warnings.append(f"{matnr}: kein Preis in Datenquelle {preise.upper()} gefunden.")
-                data = {"hana": hana, "mara": mara.get(matnr), "origin": origin.get(matnr),
+                data = {"hana": hana, "werks": werks, "mara": mara.get(matnr), "origin": origin.get(matnr),
                         "assets": assets.get(matnr, {}), "eprel": eprel.get(matnr, {}),
                         "price_row": price_rows.get(matnr), "datasheet_ok": datasheet_ok.get(matnr)}
                 products.append(_build_product(matnr, product, languages, rules, data, warnings))
