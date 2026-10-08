@@ -1,3 +1,4 @@
 {
-  "_comment": "VKORG -> GLN des liefernden EGLO-Buchungskreises (SUPPLIER_ID type=gln im BMEcat-Header). Fehlt die VKORG hier, wird SUPPLIER_ID weggelassen (im XSD optional). Nicht GS1_SENDER_GLN verwenden - das ist die GLN von EGLO Niederlande."
+  "_comment": "VKORG -> GLN des liefernden EGLO-Buchungskreises (SUPPLIER_ID type=gln im BMEcat-Header). Fehlt die VKORG hier, gilt _default (Platzhalter 0000000000000 wie in den Lobster-Dateien); ohne _default wird SUPPLIER_ID weggelassen (im XSD optional). Nicht GS1_SENDER_GLN verwenden - das ist die GLN von EGLO Niederlande.",
+  "_default": "0000000000000"
 }

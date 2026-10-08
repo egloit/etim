@@ -4,7 +4,8 @@ from lxml import etree
 
 from etim10_export import validator
 from etim10_export.bmecat_builder import NS, build_document, format_decimal
-from etim10_export.pipeline import _is_missing_price_error, _packaging, _prices, group_warnings
+from etim10_export import pipeline
+from etim10_export.pipeline import _is_missing_price_error, _packaging, _prices, _supplier_gln, group_warnings
 
 HEADER = {
     "generator_info": "test",
@@ -120,3 +121,13 @@ def test_group_warnings_collapses_repeated_causes():
         "6EX08-EFRO-BLN: Zolltarifnummer in SAP (MARC, Werk 0090) leer.",
     ]
 
+
+
+def test_supplier_gln_falls_back_to_default(tmp_path, monkeypatch):
+    config = tmp_path / "gln.json"
+    config.write_text('{"1000": "9001234567890", "_default": "0000000000000"}', encoding="utf-8")
+    monkeypatch.setattr(pipeline, "_SUPPLIER_GLN_CONFIG_PATH", config)
+    assert _supplier_gln("1000") == "9001234567890"
+    assert _supplier_gln("2000") == "0000000000000"  # Lobster placeholder
+    config.write_text('{}', encoding="utf-8")
+    assert _supplier_gln("2000") is None

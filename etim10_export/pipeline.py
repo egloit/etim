@@ -85,7 +85,7 @@ def _supplier_gln(vkorg: str) -> Optional[str]:
         config = json.loads(_SUPPLIER_GLN_CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return config.get(vkorg) or None
+    return config.get(vkorg) or config.get("_default") or None
 
 
 def _mm_to_m(value) -> Optional[str]:
