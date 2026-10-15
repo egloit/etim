@@ -148,6 +148,7 @@ def _build_sap_extension_modules(
     languages: list[tuple[str, dict]],
     sap_language_config: dict,
     country_code_config: dict,
+    pim_descriptions: Optional[dict[str, str]] = None,
 ) -> list:
     """Measurements/description/origin extension modules sourced from SAP
     HANA rather than the PIM - see sap_database.py. hana_conn is None if the
@@ -201,6 +202,10 @@ def _build_sap_extension_modules(
         text = sap_descriptions.get(spras)
         if text:
             descriptions_by_language[gs1_code] = text
+    # A real PIM translation (MAKTX that isn't just the German text, see
+    # _pim_descriptions) beats SAP MAKT, whose non-German rows are often a
+    # copy of the German text (e.g. SPRAS N).
+    descriptions_by_language.update(pim_descriptions or {})
     if descriptions_by_language:
         modules.append(
             gs1_exporter.build_trade_item_description_module_element(
@@ -251,6 +256,28 @@ def _batteries_included(codes: list[str]) -> Optional[bool]:
         if c.endswith("_N") or c == "FALSE":
             return False
     return None
+
+
+def _pim_locales(lang_cfg: dict) -> list[str]:
+    """pim_locale plus the configured fallbacks (e.g. nl_NL -> nl_BE)."""
+    return [lang_cfg["pim_locale"], *lang_cfg.get("pim_fallback", [])]
+
+
+def _pim_descriptions(product: dict, language_config: dict) -> dict[str, str]:
+    """{gs1 languageCode: MAKTX} from the PIM, only where it is a real
+    translation - non-German texts identical to MAKTX de_DE are skipped, as
+    are German ones (SAP MAKT stays the German master)."""
+    value = pim_reader.get_pim_value(product, "MAKTX")
+    translations = (value or {}).get("translations") or {}
+    german = (translations.get("de_DE") or "").strip()
+    out = {}
+    for code, cfg in language_config.items():
+        if code.startswith("_") or cfg["gs1_code"] == "de":
+            continue
+        text = next((t.strip() for loc in _pim_locales(cfg) if (t := translations.get(loc)) and t.strip()), "")
+        if text and text != german:
+            out[cfg["gs1_code"]] = text
+    return out
 
 
 def _manual_number(conn, matnr: str, pickid: str) -> Optional[int]:
@@ -514,7 +541,7 @@ def export_batch(
 
                 texts_by_language: dict[str, str] = {}
                 for lang_code, lang_cfg in languages:
-                    text = pim_reader.resolve_text(value, lang_cfg["pim_locale"])
+                    text = next((t for loc in _pim_locales(lang_cfg) if (t := pim_reader.resolve_text(value, loc))), None)
                     if text:
                         texts_by_language[lang_cfg["gs1_code"]] = text
 
@@ -566,6 +593,7 @@ def export_batch(
             extension_modules.extend(
                 _build_sap_extension_modules(
                     hana_conn, matnr, werks.strip(), languages, sap_language_config, country_code_config,
+                    pim_descriptions=_pim_descriptions(product, language_config),
                 )
             )
 
@@ -602,7 +630,9 @@ def export_batch(
             # propertyDescription (language_mapping.json), not SAP's spras.
             marketing_texts_by_language: dict[str, str] = {}
             for lang_code, lang_cfg in languages:
-                text = gs1_mapping.get_pim_catalog_textarea_value(conn, matnr, "PIM_ARTIKELTEXT", lang_cfg["pim_locale"])
+                # e.g. nl_NL missing but nl_BE filled -> nl_BE (pim_fallback in language_mapping.json)
+                text = next((t for loc in _pim_locales(lang_cfg)
+                             if (t := gs1_mapping.get_pim_catalog_textarea_value(conn, matnr, "PIM_ARTIKELTEXT", loc))), None)
                 if text:
                     marketing_texts_by_language[lang_cfg["gs1_code"]] = text
             if marketing_texts_by_language:

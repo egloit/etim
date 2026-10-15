@@ -279,6 +279,37 @@ def test_export_batch_builds_diameter_and_battery_modules(monkeypatch, product):
     assert props == []
 
 
+def test_pim_descriptions_only_real_translations():
+    cfg = {"_comment": "x", "nl": {"pim_locale": "nl_NL", "gs1_code": "nl", "pim_fallback": ["nl_BE"]},
+           "fr": {"pim_locale": "fr_FR", "gs1_code": "fr"}, "eng": {"pim_locale": "en_GB", "gs1_code": "en", "pim_fallback": ["en_US"]},
+           "ger": {"pim_locale": "de_DE", "gs1_code": "de"}}
+    product = {"values": {"MAKTX": [
+        {"locale": "de_DE", "data": "LED-HL CHROM/WEISS 'LASANA'", "attribute_type": "pim_catalog_text"},
+        {"locale": "nl_NL", "data": "LED-HL CHROOM/WIT 'LASANA'", "attribute_type": "pim_catalog_text"},
+        {"locale": "fr_FR", "data": "LED-HL CHROM/WEISS 'LASANA'", "attribute_type": "pim_catalog_text"},
+        {"locale": "en_US", "data": "LED-PL CHROME/WHITE 'LASANA'", "attribute_type": "pim_catalog_text"},
+    ]}}
+    # fr is only the German copy -> left to SAP; en via fallback en_US; de stays SAP
+    assert pipeline._pim_descriptions(product, cfg) == {"nl": "LED-HL CHROOM/WIT 'LASANA'", "en": "LED-PL CHROME/WHITE 'LASANA'"}
+
+
+def test_marketing_text_falls_back_to_nl_be(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(database, "get_active_mappings", lambda conn, brick_id: [{"pickid": "4.651", "pimfeld": "(manual)"}])
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyString")
+    monkeypatch.setattr(database, "get_manual_property_value", lambda conn, matnr, pick_id: None)
+    monkeypatch.setattr(
+        database, "get_pim_catalog_textarea_value",
+        lambda conn, matnr, attribute_code, locale: "Deze hanglamp ..." if locale == "nl_BE" else None,
+    )
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["nl"])
+
+    assert b"Deze hanglamp ..." in xml_bytes
+
+
 def test_batteries_included_from_zzakkjn():
     assert pipeline._batteries_included(["ZZAKKJN_J"]) is True
     assert pipeline._batteries_included(["ZZAKKJN_N"]) is False
