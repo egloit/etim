@@ -239,6 +239,20 @@ def _build_sap_extension_modules(
     return modules
 
 
+_BEBAT_PICK = "4.651"
+
+
+def _batteries_included(codes: list[str]) -> Optional[bool]:
+    """ZZAKKJN select ("ZZAKKJN_J" / "ZZAKKJN_N") or a boolean field -> bool, None if unset."""
+    for code in codes:
+        c = code.strip().upper()
+        if c.endswith("_J") or c == "TRUE":
+            return True
+        if c.endswith("_N") or c == "FALSE":
+            return False
+    return None
+
+
 def _manual_number(conn, matnr: str, pickid: str) -> Optional[int]:
     """Whole number from gs1_manual_property_values for matnr+Pick, rounded
     half up like the PIM path. None if missing/not numeric."""
@@ -353,6 +367,11 @@ def export_batch(
                 continue
 
             properties = []
+            # Picks whose GDSN attribute lives in an extension module, not in
+            # additionalTradeItemClassificationProperty - collected here, the
+            # modules are built below.
+            bulb_diameter: Optional[int] = None
+            batteries_included: Optional[bool] = None
             for mapping_row in mappings:
                 pickid = mapping_row["pickid"]
                 pimfeld = mapping_row["pimfeld"]
@@ -463,6 +482,19 @@ def export_batch(
                     properties.append(gs1_exporter.build_integer_property_element(pickid, amount))
                     continue
 
+                if gdsn_type == "lightBulbDiameterValue":
+                    bulb_diameter = pim_reader.get_pim_number_as_int(product, pimfeld)
+                    if bulb_diameter is None:
+                        bulb_diameter = _manual_number(conn, matnr, pickid)
+                    continue
+
+                if gdsn_type == "areBatteriesIncluded":
+                    batteries_included = _batteries_included(pim_reader.get_pim_raw_codes(product, pimfeld))
+                    if batteries_included is None and gs1_mapping.get_manual_property_value(conn, matnr, _BEBAT_PICK):
+                        # No J/N in the PIM, but a Bebat code = the article contains batteries.
+                        batteries_included = True
+                    continue
+
                 if gdsn_type is not None and gdsn_type != "propertyDescription":
                     logger.info(
                         "GS1 EXPORT | matnr=%s pickid=%s: GDSN-Typ '%s' noch nicht unterstuetzt "
@@ -509,13 +541,25 @@ def export_batch(
                 )
 
             declared_power = pim_reader.get_pim_number_as_int(product, "PIM_FAS_05_1")
-            if declared_power is not None:
+            if declared_power is not None or bulb_diameter is not None:
                 extension_modules.append(
-                    gs1_exporter.build_lighting_device_module_element(declared_power, "WTT")
+                    gs1_exporter.build_lighting_device_module_element(declared_power, "WTT", bulb_diameter)
                 )
             else:
                 logger.info(
-                    "GS1 EXPORT | matnr=%s: kein PIM_FAS_05_1-Wert, lightingDeviceModule wird ausgelassen",
+                    "GS1 EXPORT | matnr=%s: weder PIM_FAS_05_1 noch Lampendurchmesser, "
+                    "lightingDeviceModule wird ausgelassen",
+                    matnr,
+                )
+            # Benelux rules 500.415/500.392 (Error NL+BE): areBatteriesIncluded 'true'
+            # needs a batteryDetail with areBatteriesBuiltIn, which we have no source
+            # for yet - so only 'false' is sent for now.
+            if batteries_included is False:
+                extension_modules.append(gs1_exporter.build_battery_information_module_element(False))
+            elif batteries_included:
+                logger.info(
+                    "GS1 EXPORT | matnr=%s: Batterien enthalten, aber kein batteryDetail/areBatteriesBuiltIn "
+                    "- batteryInformationModule wird ausgelassen (Benelux-Regel 500.415)",
                     matnr,
                 )
 

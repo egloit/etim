@@ -254,6 +254,37 @@ def test_export_batch_measurement_falls_back_to_manual_value(monkeypatch, produc
     assert measurement.get("measurementUnitCode") == "HUR"
 
 
+def test_export_batch_builds_diameter_and_battery_modules(monkeypatch, product):
+    """8.355 from the manual table (PIM empty), 4.292 from the Bebat code fallback."""
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "8.355", "pimfeld": "FIELD_NOT_IN_PIM"},
+                                {"pickid": "4.292", "pimfeld": "FIELD_NOT_IN_PIM_EITHER"}],
+    )
+    types = {"8.355": "lightBulbDiameterValue", "4.292": "areBatteriesIncluded"}
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: types[pick_id])
+    manual = {"8.355": "60", "4.651": "B106010726"}
+    monkeypatch.setattr(database, "get_manual_property_value", lambda conn, matnr, pick_id: manual.get(pick_id))
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    item = _trade_items(xml_bytes)[0]
+    assert item.findtext(".//{*}lightingDeviceModule/lightBulbInformation/lightBulbDiameterValue") == "60"
+    # 'true' needs batteryDetail (Benelux 500.415) - not sent until we have it
+    assert item.find(".//{*}batteryInformationModule") is None
+    props = item.findall(".//additionalTradeItemClassificationProperty")
+    assert props == []
+
+
+def test_batteries_included_from_zzakkjn():
+    assert pipeline._batteries_included(["ZZAKKJN_J"]) is True
+    assert pipeline._batteries_included(["ZZAKKJN_N"]) is False
+    assert pipeline._batteries_included([]) is None
+
+
 def test_export_batch_builds_lighting_device_module_when_pim_fas_05_1_present(monkeypatch, product):
     monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
     product = dict(product)

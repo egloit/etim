@@ -9,5 +9,10 @@
     "dutyFeeTaxAgencyCode": "281",
     "dutyFeeTaxTypeCode": "VAT",
     "dutyFeeTaxCategoryCode": "HIGH"
+  },
+  "0012": {
+    "dutyFeeTaxAgencyCode": "281",
+    "dutyFeeTaxTypeCode": "VAT",
+    "dutyFeeTaxCategoryCode": "STANDARD"
   }
 }
