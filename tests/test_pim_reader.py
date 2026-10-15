@@ -100,7 +100,12 @@ def test_get_pim_number_as_int_strips_unit_suffix_and_comma_decimal(product):
         "data": "32,5", "scope": None, "locale": None, "attribute_type": "pim_catalog_text",
     }]
     assert get_pim_number_as_int(product, "PIM_MAX_POWER_INCL_TRANSFORMER") == 10
-    assert get_pim_number_as_int(product, "PIM_FAS_05_1") == 32
+    assert get_pim_number_as_int(product, "PIM_FAS_05_1") == 33
+
+
+def test_round_half_up():
+    from gs1_export.pim_reader import round_half_up
+    assert [round_half_up(v) for v in ("2.6", "2,4", "4.5", "4,5", "10", "18.5")] == [3, 2, 5, 5, 10, 19]
 
 
 def test_get_pim_raw_codes_handles_boolean_fields(product):

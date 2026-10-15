@@ -226,6 +226,34 @@ def test_export_batch_skips_property_string_without_manual_entry(monkeypatch, pr
     assert props == []
 
 
+def test_export_batch_measurement_falls_back_to_manual_value(monkeypatch, product):
+    """Empty PIM field -> stopgap value from gs1_manual_property_values (webcenter)."""
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.162", "pimfeld": "FIELD_NOT_IN_PIM"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyMeasurement")
+    monkeypatch.setattr(database, "get_measurement_unit_code", lambda conn, brick_id, pick_id: "HUR")
+    monkeypatch.setattr(
+        database, "get_manual_property_value",
+        lambda conn, matnr, pick_id: "25000" if pick_id == "4.162" else None,
+    )
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    props = _trade_items(xml_bytes)[0].findall(
+        "gdsnTradeItemClassification/additionalTradeItemClassification"
+        "/additionalTradeItemClassificationValue/additionalTradeItemClassificationProperty"
+    )
+    assert len(props) == 1
+    measurement = props[0].find("propertyMeasurement")
+    assert measurement.text == "25000"
+    assert measurement.get("measurementUnitCode") == "HUR"
+
+
 def test_export_batch_builds_lighting_device_module_when_pim_fas_05_1_present(monkeypatch, product):
     monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
     product = dict(product)

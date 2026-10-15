@@ -239,6 +239,16 @@ def _build_sap_extension_modules(
     return modules
 
 
+def _manual_number(conn, matnr: str, pickid: str) -> Optional[int]:
+    """Whole number from gs1_manual_property_values for matnr+Pick, rounded
+    half up like the PIM path. None if missing/not numeric."""
+    value = gs1_mapping.get_manual_property_value(conn, matnr, pickid)
+    try:
+        return pim_reader.round_half_up(value) if value else None
+    except (ValueError, ArithmeticError):
+        return None
+
+
 def _resolve_crosswalk_value(conn, pickid: str, pim_codes: list[str]) -> Optional[str]:
     """Check every candidate raw PIM code for an exact gs1_pim_value_crosswalk
     match (multiselect fields can have several selected codes - a match
@@ -375,19 +385,24 @@ def export_batch(
                         crosswalk_value = _resolve_crosswalk_value(conn, pickid, pim_codes)
                         if crosswalk_value:
                             try:
-                                amount = int(float(crosswalk_value.replace(",", ".")))
-                            except ValueError:
+                                amount = pim_reader.round_half_up(crosswalk_value)
+                            except (ValueError, ArithmeticError):
                                 amount = None
                     if amount is None:
                         if pickid in _SUM_ALL_NUMBERS_PICKS:
                             amount = pim_reader.get_pim_number_sum_as_int(product, pimfeld)
                         else:
                             amount = pim_reader.get_pim_number_as_int(product, pimfeld)
+                    if amount is None:
+                        # Stopgap while the PIM field is empty: value from
+                        # gs1_manual_property_values (e.g. source 'webcenter' =
+                        # read from the packaging layouts).
+                        amount = _manual_number(conn, matnr, pickid)
 
                     if amount is None:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s: kein Zahlwert (weder Crosswalk "
-                            "noch direkte Zahl), Property wird ausgelassen",
+                            "noch direkte Zahl noch gs1_manual_property_values), Property wird ausgelassen",
                             matnr, pickid, pimfeld,
                         )
                         continue
