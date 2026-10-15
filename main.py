@@ -190,6 +190,7 @@ async def index(request: Request):
             "request": request,
             "user": user,
             "roles": user.get("roles", []),
+            "etim10_direct": ETIM10_DIRECT_EXPORT,
         }
     )
 
@@ -497,6 +498,8 @@ async def submit_endpoint(
     email: str = Form(default=""),
     mode: str = Form(default="etim"),
     preise: str = Form(default="none"),
+    bildnamen: str = Form(default="matnr"),
+    erzeugung: str = Form(default="programm"),
     file: UploadFile = File(...),
 ):
     lang_list = languages or []
@@ -599,8 +602,8 @@ async def submit_endpoint(
         )
 
     # ETIM10: generate the BMEcat directly (instead of sending JSON to Lobster)
-    # once ETIM10_DIRECT_EXPORT is switched on.
-    if mode == "etim" and ETIM10_DIRECT_EXPORT:
+    # when ETIM10_DIRECT_EXPORT is switched on and the user didn't pick Lobster.
+    if mode == "etim" and ETIM10_DIRECT_EXPORT and erzeugung != "lobster":
         matnrs = [r.get("Materialnummer", "").strip() for r in rows if r.get("Materialnummer", "").strip()]
         exported_by = request.session.get("user", {}).get("email") or None
         warning_details: list[str] = []
@@ -608,6 +611,8 @@ async def submit_endpoint(
             xml_bytes, export_warnings, validation_errors = etim10_export_batch(
                 matnrs, lang_list, kunnr.strip(), vkorg.strip(), vtweg.strip(), spart.strip(),
                 werks.strip(), preise, exported_by, warning_details,
+                image_names="uuid" if bildnamen == "uuid" else "matnr",
+                file_rows=rows,
             )
         except Etim10PipelineError as exc:
             logger.error("ETIM10 EXPORT ERROR | %s", exc)

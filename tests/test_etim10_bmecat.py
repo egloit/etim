@@ -5,7 +5,7 @@ from lxml import etree
 from etim10_export import validator
 from etim10_export.bmecat_builder import NS, build_document, format_decimal
 from etim10_export import pipeline
-from etim10_export.pipeline import _is_missing_price_error, _packaging, _prices, _supplier_gln, group_warnings
+from etim10_export.pipeline import _is_missing_price_error, _mime_filename, file_price_rows, _packaging, _prices, _supplier_gln, group_warnings
 
 HEADER = {
     "generator_info": "test",
@@ -131,3 +131,26 @@ def test_supplier_gln_falls_back_to_default(tmp_path, monkeypatch):
     assert _supplier_gln("2000") == "0000000000000"  # Lobster placeholder
     config.write_text('{}', encoding="utf-8")
     assert _supplier_gln("2000") is None
+
+
+def test_mime_filename_uuid_option():
+    asset = {"filename": "96883_101_0001.jpg", "filename_uuid": "798d742b9dde4e78b38b3506d53e20ed_101_0001.jpg"}
+    assert _mime_filename(asset, "matnr") == "96883_101_0001.jpg"
+    assert _mime_filename(asset, None) == "96883_101_0001.jpg"
+    assert _mime_filename(asset, "uuid") == "798d742b9dde4e78b38b3506d53e20ed_101_0001.jpg"
+    assert _mime_filename({**asset, "filename_uuid": None}, "uuid") == "96883_101_0001.jpg"
+
+
+def test_file_price_rows_from_upload():
+    rows = [{"Materialnummer": "3041", "Preis": "21.75", "Preis_ab": "22.09.2026", "MWST_in_": "0.19",
+             "Preis_2": "", "EUR": "EUR", "Territory": "DE"},
+            {"Materialnummer": "3355", "Preis": "17,36", "Preis_ab": "2026-09-22", "MWST_in_": "19%",
+             "Preis_2": "39,90", "EUR": "", "Territory": "DE"},
+            {"Materialnummer": "3041", "Preis": "1", "Preis_ab": "", "MWST_in_": "", "Preis_2": "", "EUR": ""}]
+    out = file_price_rows(rows)
+    assert out["3041"]["valid_from"] == "2026-09-22"
+    assert _prices(out["3041"]) == {"amounts": [("net_list", "21.75")], "currency": "EUR", "tax": "0.19"}
+    assert out["3355"]["currency"] == "EUR"
+    assert _prices(out["3355"]) == {"amounts": [("net_list", "17.36"), ("nrp", "39.9")],
+                                    "currency": "EUR", "tax": "0.19"}
+    assert _prices(file_price_rows([{"Materialnummer": "1", "Preis": "", "Preis_2": ""}])["1"]) is None

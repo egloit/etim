@@ -21,7 +21,8 @@ import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
 
@@ -174,6 +175,49 @@ def _prices(row: Optional[dict]) -> Optional[dict]:
             "tax": bmecat_builder.format_decimal(vat / 100) if vat is not None else None}
 
 
+def _to_decimal(value: str) -> Optional[Decimal]:
+    try:
+        return Decimal(value.strip().rstrip("%").strip().replace(",", ".")) if value and value.strip() else None
+    except InvalidOperation:
+        return None
+
+
+def _to_iso_date(value: str) -> Optional[str]:
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(value.strip(), fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def file_price_rows(rows: list[dict]) -> dict[str, dict]:
+    """Prices from the uploaded file (Preise = CSV), keyed like c_PriceData so
+    _prices() reads them the same way - Lobster used to load the file into
+    c_PriceData first. First row per matnr wins. VAT from an Excel percent
+    cell arrives as a fraction (0.19) and is turned into 19."""
+    out: dict[str, dict] = {}
+    for row in rows:
+        matnr = (row.get("Materialnummer") or "").strip()
+        if not matnr or matnr in out:
+            continue
+        vat = _to_decimal(row.get("MWST_in_", ""))
+        if vat is not None and 0 < vat < 1:
+            vat *= 100
+        out[matnr] = {"currency": (row.get("EUR") or "").strip() or "EUR",
+                      "VatRatePercentage": vat,
+                      "PurchasePriceExcludingVat": _to_decimal(row.get("Preis", "")),
+                      "SuggestedRetailPriceIncludingVat": _to_decimal(row.get("Preis_2", "")),
+                      "valid_from": _to_iso_date(row.get("Preis_ab") or "")}
+    return out
+
+
+def _mime_filename(asset: dict, image_names: Optional[str]) -> Optional[str]:
+    """"uuid" like Lobster's "urlmodus": "UUID" - the DAM file name built from the
+    asset UUID instead of the material number (falls back if the DAM has none)."""
+    return (image_names == "uuid" and asset.get("filename_uuid")) or asset["filename"]
+
+
 def _build_product(matnr: str, product: dict, languages: list[dict], rules: RuleSet, data: dict,
                    warnings: list[str]) -> dict:
     """*data*: prefetched {mara, origin, assets, eprel, price_row, datasheet_ok, hana}."""
@@ -219,13 +263,16 @@ def _build_product(matnr: str, product: dict, languages: list[dict], rules: Rule
             warnings.append(f"{matnr}: {' und '.join(missing)} in SAP (MARC, Werk {data['werks']}) leer.")
 
     p["prices"] = _prices(data["price_row"])
+    if (data["price_row"] or {}).get("valid_from"):
+        p["price_date"] = data["price_row"]["valid_from"]
 
     assets, eprel = data["assets"], data["eprel"]
     mimes = []
     for asset_code, mime_code in sources.DAM_MIME_CODES:
         asset = assets.get(asset_code)
         if asset:
-            mimes.append({"source": asset["url"], "code": mime_code, "filename": asset["filename"]})
+            mimes.append({"source": asset["url"], "code": mime_code,
+                          "filename": _mime_filename(asset, data.get("image_names"))})
         if mime_code == "MD01":
             if not asset:
                 warnings.append(f"{matnr}: kein Produktbild (DAM AssetCode 101).")
@@ -245,13 +292,16 @@ def _build_product(matnr: str, product: dict, languages: list[dict], rules: Rule
 
 def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: str, vtweg: str, spart: str,
                  werks: str = "", preise: str = "none", exported_by: Optional[str] = None,
-                 warning_details: Optional[list[str]] = None,
+                 warning_details: Optional[list[str]] = None, image_names: str = "matnr",
+                 file_rows: Optional[list[dict]] = None,
                  ) -> tuple[bytes, list[str], list[dict]]:
     """Build one BMEcat T_NEW_CATALOG document for *matnrs*.
 
     Returns (xml_bytes, warnings grouped by cause, validation_errors); the
     ungrouped per-article warnings go into *warning_details* if given (problem
-    list stored with the file)."""
+    list stored with the file). *image_names*: "matnr" (default) or "uuid" for
+    the MIME_FILENAME of the DAM images. *file_rows*: the uploaded rows - with
+    preise "csv" the prices come from there, not from c_PriceData."""
     languages = _load_languages(lang_codes)
     unique_matnrs = list(dict.fromkeys(m.strip() for m in matnrs if m.strip()))
     warnings: list[str] = []
@@ -285,7 +335,9 @@ def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: st
         }
 
         price_rows = {}
-        if preise in ("csv", "sap"):
+        if preise == "csv":
+            price_rows = file_price_rows(file_rows or [])
+        elif preise == "sap":
             price_rows = sources.get_prices(pg, unique_matnrs, vkorg, vtweg, spart, kunnr.zfill(10), preise)
 
         datasheet_ok: dict[str, Optional[bool]] = {}
@@ -317,10 +369,12 @@ def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: st
                     warnings.append(f"{matnr}: keine ETIM-Klasse für ZZTYPEN '{zztyp}' – nicht in der Datei.")
                     continue
                 if preise in ("csv", "sap") and not _prices(price_rows.get(matnr)):
-                    warnings.append(f"{matnr}: kein Preis in Datenquelle {preise.upper()} gefunden.")
+                    warnings.append(f"{matnr}: kein Preis in der Upload-Datei." if preise == "csv"
+                                    else f"{matnr}: kein Preis in Datenquelle {preise.upper()} gefunden.")
                 data = {"hana": hana, "werks": werks, "mara": mara.get(matnr), "origin": origin.get(matnr),
                         "assets": assets.get(matnr, {}), "eprel": eprel.get(matnr, {}),
-                        "price_row": price_rows.get(matnr), "datasheet_ok": datasheet_ok.get(matnr)}
+                        "price_row": price_rows.get(matnr), "datasheet_ok": datasheet_ok.get(matnr),
+                        "image_names": image_names}
                 products.append(_build_product(matnr, product, languages, rules, data, warnings))
                 history.append((matnr, products[-1].get("class_id"), product.get("updated"), exported_by,
                                 Jsonb(_snapshot(products[-1]))))
