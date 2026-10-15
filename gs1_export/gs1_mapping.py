@@ -35,6 +35,16 @@ def get_pim_catalog_text_value(
     return database.get_pim_catalog_text_value(conn, matnr, attribute_code, locale)
 
 
+def get_pim_catalog_textarea_value(
+    conn: psycopg.Connection, matnr: str, attribute_code: str, locale: str
+) -> Optional[str]:
+    return database.get_pim_catalog_textarea_value(conn, matnr, attribute_code, locale)
+
+
+def get_primary_product_image(conn: psycopg.Connection, matnr: str) -> Optional[dict]:
+    return database.get_primary_product_image(conn, matnr)
+
+
 def get_pim_value_crosswalk(conn: psycopg.Connection, pick_id: str, pim_code: str) -> Optional[str]:
     return database.get_pim_value_crosswalk(conn, pick_id, pim_code)
 

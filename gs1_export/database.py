@@ -7,6 +7,7 @@ import os
 from typing import Optional
 
 import psycopg
+from psycopg.types.json import Jsonb
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -228,6 +229,69 @@ def get_pim_catalog_text_value(
         return None
 
 
+def get_pim_catalog_textarea_value(
+    conn: psycopg.Connection, matnr: str, attribute_code: str, locale: str
+) -> Optional[str]:
+    """Same shape as get_pim_catalog_text_value(), but against
+    public.pim_egloakeneo_product_values_pim_catalog_textarea - PIM's
+    textarea (multi-line) fields live in a separate table from its single-
+    line pim_catalog_text fields. Used for PIM_ARTIKELTEXT, confirmed
+    2026-09-23 as the real tradeItemMarketingMessage source, replacing the
+    MAKTX placeholder (see gs1_exporter.build_marketing_information_module_
+    element's docstring)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT data
+                FROM public.pim_egloakeneo_product_values_pim_catalog_textarea
+                WHERE matnr = %s AND attribute_code = %s AND locale = %s
+                LIMIT 1
+                """,
+                (matnr, attribute_code, locale),
+            )
+            row = cur.fetchone()
+            if not row or not row[0] or row[0] in ("[]", "null"):
+                return None
+            return row[0].replace("\\/", "/")
+    except psycopg.errors.UndefinedTable:
+        logger.warning(
+            "pim_egloakeneo_product_values_pim_catalog_textarea existiert noch nicht - "
+            "Text nicht bestimmbar."
+        )
+        return None
+
+
+def get_primary_product_image(conn: psycopg.Connection, matnr: str) -> Optional[dict]:
+    """Look up the main product photo from public.dam_cdh_product_assets_view
+    for referencedFileDetailInformationModule. Scoped to asset_code='101'
+    (asset_code_name 'VIEW') and asset_type='IMAGE' only - the user decided
+    2026-09-23 to ship just the primary product shot for now, not the other
+    asset types seen on the view (DETAIL/DIMENSION/AMBIENT images, 360 VIDEO)
+    - those need their own referencedFileTypeCode decisions, parked for
+    later. url_default_resolution is a real, directly usable URL (unlike the
+    "NB" placeholder seen in the real GS1-portal reference export). Tolerant
+    of the view not existing yet, same pattern as the other lookups."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT url_default_resolution, filename_for_url
+                FROM public.dam_cdh_product_assets_view
+                WHERE matnr = %s AND asset_code = '101' AND asset_type = 'IMAGE'
+                LIMIT 1
+                """,
+                (matnr,),
+            )
+            row = cur.fetchone()
+            if not row or not row[0] or not row[1]:
+                return None
+            return {"url": row[0], "filename": row[1]}
+    except psycopg.errors.UndefinedTable:
+        logger.warning("dam_cdh_product_assets_view existiert noch nicht - Produktbild nicht bestimmbar.")
+        return None
+
+
 def get_manual_property_value(conn: psycopg.Connection, matnr: str, pick_id: str) -> Optional[str]:
     """Look up a manually-maintained property value for a matnr+Pick from
     public.gs1_manual_property_values - used for GDSN attributes GS1 itself
@@ -278,6 +342,7 @@ def upsert_export_history(
     brick_id: Optional[str],
     pim_updated_at_export: Optional[str],
     exported_by: Optional[str],
+    value_snapshot: Optional[dict] = None,
 ) -> None:
     """Record/refresh "this matnr was GS1-exported, PIM's updated timestamp was
     X at that time" in public.gs1_export_history - one row per matnr, latest
@@ -290,15 +355,17 @@ def upsert_export_history(
             cur.execute(
                 """
                 INSERT INTO public.gs1_export_history
-                    (matnr, brick_id, exported_at, pim_updated_at_export, exported_by)
-                VALUES (%s, %s, now(), %s, %s)
+                    (matnr, brick_id, exported_at, pim_updated_at_export, exported_by, value_snapshot)
+                VALUES (%s, %s, now(), %s, %s, %s)
                 ON CONFLICT (matnr) DO UPDATE SET
                     brick_id = EXCLUDED.brick_id,
                     exported_at = EXCLUDED.exported_at,
                     pim_updated_at_export = EXCLUDED.pim_updated_at_export,
-                    exported_by = EXCLUDED.exported_by
+                    exported_by = EXCLUDED.exported_by,
+                    value_snapshot = EXCLUDED.value_snapshot
                 """,
-                (matnr, brick_id, pim_updated_at_export, exported_by),
+                (matnr, brick_id, pim_updated_at_export, exported_by,
+                 Jsonb(value_snapshot) if value_snapshot is not None else None),
             )
     except psycopg.errors.UndefinedTable:
         logger.warning("gs1_export_history existiert noch nicht - Export-Historie wird nicht gespeichert.")
@@ -319,7 +386,8 @@ def get_changed_articles(conn: psycopg.Connection) -> list[dict]:
             cur.execute("SET statement_timeout = '5s'")
             cur.execute(
                 """
-                SELECT h.matnr, h.exported_at, h.pim_updated_at_export, latest.updated
+                SELECT h.matnr, h.exported_at, h.pim_updated_at_export, latest.updated,
+                       h.value_snapshot IS NOT NULL
                 FROM public.gs1_export_history h
                 JOIN LATERAL (
                     SELECT updated
@@ -338,6 +406,7 @@ def get_changed_articles(conn: psycopg.Connection) -> list[dict]:
                     "exported_at": r[1].isoformat() if r[1] else None,
                     "pim_updated_at_export": r[2],
                     "pim_updated_now": r[3],
+                    "has_details": r[4],
                 }
                 for r in cur.fetchall()
             ]
@@ -346,12 +415,33 @@ def get_changed_articles(conn: psycopg.Connection) -> list[dict]:
         return []
 
 
+def get_export_snapshot(conn: psycopg.Connection, matnr: str) -> Optional[dict]:
+    """value_snapshot of the last GS1 export of *matnr* ({"params", "values"}), or None."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT brick_id, value_snapshot FROM public.gs1_export_history WHERE matnr = %s", (matnr,)
+        )
+        row = cur.fetchone()
+    return {"brick_id": row[0], **row[1]} if row and row[1] else None
+
+
+def get_pick_names(conn: psycopg.Connection, brick_id: str) -> dict[str, str]:
+    """{"pick:4.015": "Colour Family", ...} for readable change lists."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT pick_id, attribute_name FROM public.gs1_gpc_attribute_types WHERE brick_id = %s",
+            (brick_id,),
+        )
+        return {f"pick:{pick}": f"{pick} {name}" for pick, name in cur.fetchall() if name}
+
+
 def save_export_file(
     conn: psycopg.Connection,
     filename: str,
     exported_by: Optional[str],
     matnrs: list[str],
     xml_bytes: bytes,
+    issues: Optional[list[dict]] = None,
 ) -> None:
     """Persist a generated GS1 XML file in public.gs1_export_files so the user
     who generated it can find/re-download it later (see list_export_files()/
@@ -364,10 +454,10 @@ def save_export_file(
             cur.execute(
                 """
                 INSERT INTO public.gs1_export_files
-                    (filename, exported_by, matnrs, article_count, xml_content)
-                VALUES (%s, %s, %s, %s, %s)
+                    (filename, exported_by, matnrs, article_count, xml_content, issues)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (filename, exported_by, matnrs, len(matnrs), xml_bytes),
+                (filename, exported_by, matnrs, len(matnrs), xml_bytes, Jsonb(issues or [])),
             )
     except psycopg.errors.UndefinedTable:
         logger.warning("gs1_export_files existiert noch nicht - Datei wird nicht archiviert.")
@@ -381,7 +471,8 @@ def list_export_files(conn: psycopg.Connection, exported_by: str) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, filename, exported_at, article_count, matnrs
+                SELECT id, filename, exported_at, article_count, matnrs,
+                       COALESCE(jsonb_array_length(issues), 0)
                 FROM public.gs1_export_files
                 WHERE exported_by = %s
                 ORDER BY exported_at DESC
@@ -395,6 +486,7 @@ def list_export_files(conn: psycopg.Connection, exported_by: str) -> list[dict]:
                     "exported_at": r[2].isoformat() if r[2] else None,
                     "article_count": r[3],
                     "matnrs": r[4],
+                    "issue_count": r[5],
                 }
                 for r in cur.fetchall()
             ]
@@ -411,14 +503,14 @@ def get_export_file(conn: psycopg.Connection, file_id: int, exported_by: str) ->
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT filename, xml_content
+                SELECT filename, xml_content, issues
                 FROM public.gs1_export_files
                 WHERE id = %s AND exported_by = %s
                 """,
                 (file_id, exported_by),
             )
             row = cur.fetchone()
-            return {"filename": row[0], "xml_content": row[1]} if row else None
+            return {"filename": row[0], "xml_content": row[1], "issues": row[2] or []} if row else None
     except psycopg.errors.UndefinedTable:
         logger.warning("gs1_export_files existiert noch nicht - Datei nicht abrufbar.")
         return None

@@ -105,6 +105,38 @@
   </div>
   {% endif %}
 
+  {% if 'etim' in roles %}
+  <div id="etimChangedPanel" class="alert alert-warning d-none mb-4">
+    <div class="d-flex align-items-start gap-2">
+      <i class="bi bi-exclamation-triangle-fill fs-5 mt-1"></i>
+      <div class="flex-grow-1">
+        <strong id="etimChangedTitle"></strong>
+        <div id="etimChangedList" class="small mt-2"></div>
+        <div class="text-muted small mt-1">Artikelnummern in einer neuen Datei hochladen, um die ETIM10-Datei für diese Artikel neu zu erzeugen.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="etimFilesPanel" class="card section-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#etimFilesBody">
+      <span><i class="bi bi-clock-history me-2"></i>Meine bisherigen ETIM10-Exporte <span id="etimFilesCount" class="badge bg-secondary ms-1"></span></span>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="etimFilesBody" class="collapse">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+              <tr><th>Datum</th><th>Artikel</th><th>Datei</th><th></th></tr>
+            </thead>
+            <tbody id="etimFilesTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <form id="mainForm" novalidate autocomplete="off">
 
     <!-- ================================================================
@@ -233,7 +265,7 @@
           </div>
         </div>
 
-        <!-- E-Mail -->
+        <!-- E-Mail + Preise -->
         <div class="row g-3">
           <div class="col-sm-8 col-lg-6">
             <label for="email" class="form-label fw-semibold">
@@ -244,6 +276,33 @@
             <div class="invalid-feedback" id="emailError">Bitte eine gültige E-Mail-Adresse eingeben.</div>
             <div class="field-hint">An diese Adresse wird das Ergebnis gesendet.</div>
           </div>
+          <div class="col-sm-4 col-lg-3 mode-field" data-modes="etim">
+            <label for="preise" class="form-label fw-semibold">Preise</label>
+            <select class="form-select" id="preise" name="preise">
+              <option value="none" selected>Keine</option>
+              <option value="csv">CSV</option>
+              <option value="sap">SAP</option>
+            </select>
+            <div class="field-hint">Steuert die Preisübermittlung an den EDI-Server.</div>
+          </div>
+          {% if etim10_direct %}
+          <div class="col-sm-4 col-lg-3 mode-field" data-modes="etim">
+            <label for="erzeugung" class="form-label fw-semibold">XML-Erzeugung</label>
+            <select class="form-select" id="erzeugung" name="erzeugung">
+              <option value="programm" selected>Programm</option>
+              <option value="lobster">Lobster</option>
+            </select>
+            <div class="field-hint">Programm: BMEcat direkt hier erzeugen. Lobster: JSON an den EDI-Server.</div>
+          </div>
+          <div class="col-sm-4 col-lg-3 mode-field program-field" data-modes="etim">
+            <label for="bildnamen" class="form-label fw-semibold">Bildnamen</label>
+            <select class="form-select" id="bildnamen" name="bildnamen">
+              <option value="matnr" selected>Materialnummer</option>
+              <option value="uuid">UUID</option>
+            </select>
+            <div class="field-hint">Dateiname der Bilder im BMEcat (MIME_FILENAME).</div>
+          </div>
+          {% endif %}
         </div>
 
       </div><!-- /card-body -->
@@ -394,21 +453,59 @@ function applyMode(mode) {
       opt.querySelector('input').checked = false;
     }
   });
-  applySubmitLabels(mode);
+  document.querySelectorAll('.mode-field').forEach(el => {
+    const modes = el.dataset.modes.split(' ');
+    el.style.display = modes.includes(mode) ? '' : 'none';
+  });
+  applyGeneration();
   invalidateValidation();
   runFormValidation();
 }
 
-/* GS1 generiert nur eine Datei, sendet aber nichts an den EDI-Server */
-function applySubmitLabels(mode) {
-  const isGs1 = mode === 'gs1';
-  document.getElementById('submitBtnLabel').textContent  = isGs1 ? 'Generieren' : 'Senden';
-  document.getElementById('submitBtn2Label').textContent = isGs1 ? 'Jetzt generieren' : 'Jetzt senden';
-  document.getElementById('submitHint').textContent = isGs1
-    ? 'Die GS1-XML-Datei wird erzeugt und zum Download angeboten.'
-    : 'Daten werden an den EGLO EDI-Server übertragen.';
-  document.getElementById('resultHeaderLabel').textContent = isGs1 ? 'Exportergebnis' : 'Sendeergebnis';
+/* ETIM: XML vom Programm oder von Lobster (nur wenn die Direkterzeugung aktiv ist) */
+function getEtimGeneration() {
+  const sel = document.getElementById('erzeugung');
+  return sel ? sel.value : 'lobster';
 }
+
+/* true = die App erzeugt die Datei selbst (GS1 immer, ETIM wenn "Programm") */
+function isGenerating() {
+  const mode = getCurrentMode();
+  return mode === 'gs1' || (mode === 'etim' && getEtimGeneration() === 'programm');
+}
+
+function applyGeneration() {
+  const mode = getCurrentMode();
+  const program = mode === 'etim' && getEtimGeneration() === 'programm';
+  document.querySelectorAll('.program-field').forEach(el => {
+    el.style.display = program ? '' : 'none';
+  });
+  applySubmitLabels(mode);
+}
+
+/* [obere Leiste, unten]: ETIM Programm / GS1 = Datei zum Download, sonst JSON an den EDI-Server */
+function submitLabels() {
+  if (!isGenerating()) return ['Senden', 'Jetzt senden'];
+  if (getCurrentMode() === 'etim') return ['Generierung starten', 'Generierung starten'];
+  return ['Generieren', 'Jetzt generieren'];
+}
+
+function applySubmitLabels(mode) {
+  const generating = isGenerating();
+  const [label1, label2] = submitLabels();
+  document.getElementById('submitBtnLabel').textContent  = label1;
+  document.getElementById('submitBtn2Label').textContent = label2;
+  document.getElementById('submitHint').textContent = generating
+    ? `Die ${mode === 'gs1' ? 'GS1-XML' : 'ETIM10-BMEcat'}-Datei wird erzeugt und zum Download angeboten.`
+    : 'Daten werden an den EGLO EDI-Server übertragen.';
+  document.getElementById('resultHeaderLabel').textContent = generating ? 'Exportergebnis' : 'Sendeergebnis';
+}
+
+document.getElementById('erzeugung')?.addEventListener('change', () => {
+  applyGeneration();
+  invalidateValidation();
+  runFormValidation();
+});
 
 document.querySelectorAll('input[name="mode"]').forEach(el => {
   el.addEventListener('change', function () { applyMode(this.value); });
@@ -661,8 +758,8 @@ document.getElementById('downloadJsonBtn').addEventListener('click', () => {
 async function doSubmit() {
   if (!runFormValidation()) return;
 
-  const isGs1 = getCurrentMode() === 'gs1';
-  [submitBtn, submitBtn2].forEach(b => setButtonLoading(b, isGs1 ? 'Generiere…' : 'Sende…'));
+  const generating = isGenerating();
+  [submitBtn, submitBtn2].forEach(b => setButtonLoading(b, generating ? 'Generiere…' : 'Sende…'));
 
   try {
     const fd = new FormData(mainForm);
@@ -682,8 +779,9 @@ async function doSubmit() {
       warnings: [], row_count: 0
     });
   } finally {
-    resetButton(submitBtn,  `<i class="bi bi-send-fill me-1"></i><span id="submitBtnLabel">${isGs1 ? 'Generieren' : 'Senden'}</span>`);
-    resetButton(submitBtn2, `<i class="bi bi-send-fill me-2"></i><span id="submitBtn2Label">${isGs1 ? 'Jetzt generieren' : 'Jetzt senden'}</span>`);
+    const [label1, label2] = submitLabels();
+    resetButton(submitBtn,  `<i class="bi bi-send-fill me-1"></i><span id="submitBtnLabel">${label1}</span>`);
+    resetButton(submitBtn2, `<i class="bi bi-send-fill me-2"></i><span id="submitBtn2Label">${label2}</span>`);
     [submitBtn, submitBtn2].forEach(b => b.disabled = false);
   }
 }
@@ -721,7 +819,7 @@ async function handleGs1Download(resp) {
     <div class="alert alert-success d-flex align-items-center gap-2">
       <i class="bi bi-check-circle-fill fs-4"></i>
       <div>
-        <strong>GS1-XML wurde erzeugt und heruntergeladen.</strong><br/>
+        <strong>${filename.startsWith('etim10') ? 'ETIM10-BMEcat' : 'GS1-XML'} wurde erzeugt und heruntergeladen.</strong><br/>
         ${articleCount} Artikel verarbeitet.
         ${warnings.length > 0
           ? `<br/><span class="text-warning-emphasis small">${warnings.length} Warnung(en): ${warnings.map(escHtml).join('; ')}</span>`
@@ -732,7 +830,7 @@ async function handleGs1Download(resp) {
       </div>
     </div>`;
 
-  loadGs1Files();
+  if (filename.startsWith('etim10')) loadEtimFiles(); else loadGs1Files();
 }
 
 /* =========================================================
@@ -976,15 +1074,45 @@ async function loadGs1ChangedArticles() {
 
     document.getElementById('gs1ChangedTitle').textContent =
       `${articles.length} Artikel wurden im PIM geändert seit dem letzten GS1-Export:`;
-    document.getElementById('gs1ChangedList').innerHTML = articles
-      .map(a => `<code>${escHtml(a.matnr)}</code>`)
-      .join(', ');
+    // Details (welche Werte sich geändert haben) werden erst beim Aufklappen
+    // geladen – der Artikel wird dafür neu aufgebaut (~1 s pro Artikel).
+    document.getElementById('gs1ChangedList').innerHTML = articles.map(a => `
+      <details class="mb-1" data-matnr="${escHtml(a.matnr)}" data-has-details="${a.has_details ? '1' : ''}">
+        <summary><code>${escHtml(a.matnr)}</code>
+          <span class="text-muted">(Export ${a.exported_at ? new Date(a.exported_at).toLocaleDateString('de-DE') : ''})</span></summary>
+        <div class="gs1-change-details ms-3"></div>
+      </details>`).join('');
+    document.querySelectorAll('#gs1ChangedList details').forEach(d =>
+      d.addEventListener('toggle', () => { if (d.open) loadGs1ChangeDetails(d); }));
     panel.classList.remove('d-none');
   } catch (e) {
     // Netzwerkfehler beim Hintergrund-Check ist kein Grund, die Seite zu stören
   }
 }
 loadGs1ChangedArticles();
+
+async function loadGs1ChangeDetails(detailsEl) {
+  const target = detailsEl.querySelector('.gs1-change-details');
+  if (detailsEl.dataset.loaded) return;
+  detailsEl.dataset.loaded = '1';
+  if (!detailsEl.dataset.hasDetails) {
+    target.innerHTML = '<span class="text-muted">Details erst ab dem nächsten Export dieses Artikels verfügbar.</span>';
+    return;
+  }
+  target.innerHTML = '<span class="text-muted"><span class="spinner-border spinner-border-sm me-1"></span>Vergleiche mit dem letzten Export…</span>';
+  try {
+    const resp = await fetch(`/gs1/changed-articles/${encodeURIComponent(detailsEl.dataset.matnr)}/details`);
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.status);
+    const changes = data.changes || [];
+    target.innerHTML = changes.length === 0
+      ? '<span class="text-muted">Keine Änderung an den GS1-Werten (geändert wurde nur etwas, das nicht im GS1-Export landet).</span>'
+      : `<ul class="mb-1">${changes.map(c => `<li>${etimChangeText(c)}</li>`).join('')}</ul>`;
+  } catch (e) {
+    detailsEl.dataset.loaded = '';
+    target.innerHTML = `<span class="text-danger">Vergleich fehlgeschlagen: ${escHtml(e.message)}</span>`;
+  }
+}
 
 /* =========================================================
    GS1: Übersicht bisher generierter Dateien (pro User)
@@ -1013,6 +1141,10 @@ async function loadGs1Files() {
           <a href="/gs1/files/${f.id}/download" class="btn btn-sm btn-outline-secondary">
             <i class="bi bi-download me-1"></i>Download
           </a>
+          ${f.issue_count > 0 ? `<a href="/gs1/files/${f.id}/issues" class="btn btn-sm btn-outline-warning ms-1"
+             title="Probleme je Artikel als Excel – zur Klärung mit dem Datenmanagement">
+            <i class="bi bi-exclamation-triangle me-1"></i>Fehlerliste (${f.issue_count})
+          </a>` : ''}
         </td>
       </tr>`;
     }).join('');
@@ -1022,6 +1154,81 @@ async function loadGs1Files() {
   }
 }
 loadGs1Files();
+
+/* =========================================================
+   ETIM10: Artikel mit geänderten Merkmalen seit dem letzten Export
+   ========================================================= */
+const ETIM_CHANGE_LABELS = { added: 'neu', removed: 'entfällt', changed: 'geändert', class: 'Klasse' };
+
+function etimChangeText(c) {
+  const name = escHtml(c.name || c.feature_id || '');
+  if (c.kind === 'added')   return `<span class="badge bg-success me-1">neu</span>${name}: <strong>${escHtml(c.new)}</strong>`;
+  if (c.kind === 'removed') return `<span class="badge bg-secondary me-1">entfällt</span>${name} (bisher: ${escHtml(c.old)})`;
+  return `<span class="badge bg-warning text-dark me-1">${ETIM_CHANGE_LABELS[c.kind] || 'geändert'}</span>${name}: ${escHtml(c.old)} → <strong>${escHtml(c.new)}</strong>`;
+}
+
+async function loadEtimChangedArticles() {
+  const panel = document.getElementById('etimChangedPanel');
+  if (!panel) return; // Nutzer hat keine ETIM-Rolle
+  try {
+    const resp = await fetch('/etim10/changed-articles');
+    if (!resp.ok) return;
+    const articles = (await resp.json()).articles || [];
+    if (articles.length === 0) return;
+
+    document.getElementById('etimChangedTitle').textContent =
+      `${articles.length} Artikel haben seit dem letzten ETIM10-Export geänderte Merkmale:`;
+    document.getElementById('etimChangedList').innerHTML = articles.map(a => `
+      <details class="mb-1">
+        <summary><code>${escHtml(a.matnr)}</code> – ${a.changes.length} Änderung(en)
+          <span class="text-muted">(Export ${a.exported_at ? new Date(a.exported_at).toLocaleDateString('de-DE') : ''})</span></summary>
+        <ul class="mb-1">${a.changes.map(c => `<li>${etimChangeText(c)}</li>`).join('')}</ul>
+      </details>`).join('');
+    panel.classList.remove('d-none');
+  } catch (e) {
+    // Hintergrund-Check, Fehler stören die Seite nicht
+  }
+}
+loadEtimChangedArticles();
+
+/* =========================================================
+   ETIM10: Übersicht bisher generierter Dateien (pro User)
+   ========================================================= */
+async function loadEtimFiles() {
+  const panel = document.getElementById('etimFilesPanel');
+  if (!panel) return;
+  try {
+    const resp = await fetch('/etim10/files');
+    if (!resp.ok) return;
+    const files = (await resp.json()).files || [];
+    if (files.length === 0) return;
+
+    document.getElementById('etimFilesCount').textContent = files.length;
+    document.getElementById('etimFilesTableBody').innerHTML = files.map(f => {
+      const date = f.exported_at ? new Date(f.exported_at).toLocaleString('de-DE') : '';
+      const matnrPreview = (f.matnrs || []).slice(0, 3).map(escHtml).join(', ')
+        + ((f.matnrs || []).length > 3 ? ', …' : '');
+      return `<tr>
+        <td class="text-nowrap">${date}</td>
+        <td>${f.article_count} <span class="text-muted small">(${matnrPreview})</span></td>
+        <td><code>${escHtml(f.filename)}</code></td>
+        <td class="text-end">
+          <a href="/etim10/files/${f.id}/download" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-download me-1"></i>Download
+          </a>
+          ${f.issue_count > 0 ? `<a href="/etim10/files/${f.id}/issues" class="btn btn-sm btn-outline-warning ms-1"
+             title="Probleme je Artikel als Excel – zur Klärung mit dem Datenmanagement">
+            <i class="bi bi-exclamation-triangle me-1"></i>Fehlerliste (${f.issue_count})
+          </a>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
+    panel.classList.remove('d-none');
+  } catch (e) {
+    // Hintergrund-Ladevorgang, Fehler stören die Seite nicht
+  }
+}
+loadEtimFiles();
 </script>
 </body>
 </html>

@@ -72,7 +72,9 @@ class _RecordingCursor:
         # would actually raise UndefinedTable against a real table.
         raises_here = (
             "gs1_export_history" in query or "gs1_export_files" in query
+            # "..._pim_catalog_text" is a substring of "..._pim_catalog_textarea" too.
             or "pim_egloakeneo_product_values_pim_catalog_text" in query
+            or "dam_cdh_product_assets_view" in query
         )
         if self._raise_on_execute and raises_here:
             raise self._raise_on_execute
@@ -98,7 +100,16 @@ def test_upsert_export_history_sends_expected_params():
     database.upsert_export_history(conn, "43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com")
     query, params = cursor.calls[0]
     assert "INSERT INTO public.gs1_export_history" in query
-    assert params == ("43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com")
+    assert params == ("43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com", None)
+
+
+def test_upsert_export_history_stores_value_snapshot():
+    cursor = _RecordingCursor()
+    conn = _RecordingConnection(cursor)
+    snap = {"params": {"lang_codes": ["eng"], "vkorg": "0025", "werks": ""}, "values": {"pick:4.015": "weiss"}}
+    database.upsert_export_history(conn, "43706", "10008403", "2026-08-21T10:00:00Z", "user@eglo.com", snap)
+    _, params = cursor.calls[0]
+    assert params[-1].obj == snap
 
 
 def test_upsert_export_history_tolerates_missing_table():
@@ -111,7 +122,7 @@ def test_upsert_export_history_tolerates_missing_table():
 def test_get_changed_articles_maps_rows():
     now = datetime(2026, 8, 28, 9, 0, 0)
     cursor = _RecordingCursor(fetchall_result=[
-        ("43706", now, "2026-08-20T10:00:00Z", "2026-08-27T15:30:00Z"),
+        ("43706", now, "2026-08-20T10:00:00Z", "2026-08-27T15:30:00Z", True),
     ])
     conn = _RecordingConnection(cursor)
     result = database.get_changed_articles(conn)
@@ -120,6 +131,7 @@ def test_get_changed_articles_maps_rows():
         "exported_at": now.isoformat(),
         "pim_updated_at_export": "2026-08-20T10:00:00Z",
         "pim_updated_now": "2026-08-27T15:30:00Z",
+        "has_details": True,
     }]
 
 
@@ -135,7 +147,8 @@ def test_save_export_file_sends_expected_params():
     database.save_export_file(conn, "gs1_export_20260828.xml", "user@eglo.com", ["43706", "89534"], b"<xml/>")
     query, params = cursor.calls[0]
     assert "INSERT INTO public.gs1_export_files" in query
-    assert params == ("gs1_export_20260828.xml", "user@eglo.com", ["43706", "89534"], 2, b"<xml/>")
+    assert params[:5] == ("gs1_export_20260828.xml", "user@eglo.com", ["43706", "89534"], 2, b"<xml/>")
+    assert params[5].obj == []  # problem list (empty)
 
 
 def test_save_export_file_tolerates_missing_table():
@@ -148,7 +161,7 @@ def test_save_export_file_tolerates_missing_table():
 def test_list_export_files_maps_rows():
     now = datetime(2026, 8, 28, 9, 0, 0)
     cursor = _RecordingCursor(fetchall_result=[
-        (7, "gs1_export_20260828.xml", now, 2, ["43706", "89534"]),
+        (7, "gs1_export_20260828.xml", now, 2, ["43706", "89534"], 3),
     ])
     conn = _RecordingConnection(cursor)
     result = database.list_export_files(conn, "user@eglo.com")
@@ -158,6 +171,7 @@ def test_list_export_files_maps_rows():
         "exported_at": now.isoformat(),
         "article_count": 2,
         "matnrs": ["43706", "89534"],
+        "issue_count": 3,
     }]
     assert cursor.calls[0][1] == ("user@eglo.com",)
 
@@ -169,10 +183,10 @@ def test_list_export_files_returns_empty_list_when_table_missing():
 
 
 def test_get_export_file_returns_owned_file():
-    cursor = _RecordingCursor(fetchone_result=("gs1_export_20260828.xml", b"<xml/>"))
+    cursor = _RecordingCursor(fetchone_result=("gs1_export_20260828.xml", b"<xml/>", [{"matnr": "1"}]))
     conn = _RecordingConnection(cursor)
     result = database.get_export_file(conn, 7, "user@eglo.com")
-    assert result == {"filename": "gs1_export_20260828.xml", "xml_content": b"<xml/>"}
+    assert result == {"filename": "gs1_export_20260828.xml", "xml_content": b"<xml/>", "issues": [{"matnr": "1"}]}
     assert cursor.calls[0][1] == (7, "user@eglo.com")
 
 
@@ -210,3 +224,47 @@ def test_get_pim_catalog_text_value_tolerates_missing_table():
     cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
     conn = _RecordingConnection(cursor)
     assert database.get_pim_catalog_text_value(conn, "43706", "MAKTX", "en_GB") is None
+
+
+def test_get_pim_catalog_textarea_value_unescapes_slashes():
+    cursor = _RecordingCursor(fetchone_result=("A wall light made of white metal\\/wood.",))
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_textarea_value(conn, "43706", "PIM_ARTIKELTEXT", "en_GB") == \
+        "A wall light made of white metal/wood."
+
+
+def test_get_pim_catalog_textarea_value_treats_empty_array_marker_as_none():
+    cursor = _RecordingCursor(fetchone_result=("[]",))
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_textarea_value(conn, "43706", "PIM_ARTIKELTEXT", "en_GB") is None
+
+
+def test_get_pim_catalog_textarea_value_tolerates_missing_table():
+    cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
+    conn = _RecordingConnection(cursor)
+    assert database.get_pim_catalog_textarea_value(conn, "43706", "PIM_ARTIKELTEXT", "en_GB") is None
+
+
+def test_get_primary_product_image_returns_url_and_filename():
+    cursor = _RecordingCursor(fetchone_result=(
+        "https://eglo.contentdeliveryhub.net/api/data/std/images/abc/c/JPG", "390047_101_0001.jpg",
+    ))
+    conn = _RecordingConnection(cursor)
+    result = database.get_primary_product_image(conn, "390047")
+    assert result == {
+        "url": "https://eglo.contentdeliveryhub.net/api/data/std/images/abc/c/JPG",
+        "filename": "390047_101_0001.jpg",
+    }
+    assert cursor.calls[0][1] == ("390047",)
+
+
+def test_get_primary_product_image_returns_none_when_no_row():
+    cursor = _RecordingCursor(fetchone_result=None)
+    conn = _RecordingConnection(cursor)
+    assert database.get_primary_product_image(conn, "390047") is None
+
+
+def test_get_primary_product_image_tolerates_missing_view():
+    cursor = _RecordingCursor(raise_on_execute=psycopg.errors.UndefinedTable())
+    conn = _RecordingConnection(cursor)
+    assert database.get_primary_product_image(conn, "390047") is None

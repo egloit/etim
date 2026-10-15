@@ -8,7 +8,7 @@ Output structure:
       "matnr-tab": [ { row }, ... ],
       "Eingabe": [
         {
-          "Preise": "none",
+          "Preise": "<none|csv|sap>",
           "Bestand": "false",
           "Sprache_list": [ {"Sprache": "<code aus language_mapping.json>"}, ... ],
           "Verkaeufer": [ {"VKORG": ..., "VTWEG": ..., "SPART": ..., "WERKS": ...} ],
@@ -24,6 +24,8 @@ from datetime import datetime
 from pathlib import Path
 
 _LANGUAGE_CONFIG_PATH = Path(__file__).with_name("language_mapping.json")
+
+_ALLOWED_PREISE = {"none", "csv", "sap"}
 
 
 def _load_language_config() -> dict:
@@ -54,6 +56,7 @@ def build_json(
     werks: str,
     email: str = "",
     mode: str = "etim",
+    preise: str = "none",
 ) -> dict:
     kunnr_padded = kunnr.strip().zfill(10)
 
@@ -62,13 +65,17 @@ def build_json(
     lang_config = _load_language_config()
     sprache_list = [{"Sprache": _map_lang(lang, mode, lang_config)} for lang in languages]
 
+    preise_value = preise.strip().lower()
+    if preise_value not in _ALLOWED_PREISE:
+        preise_value = "none"
+
     return {
         "Materialliste": [
             {
                 "matnr-tab": matnr_tab,
                 "Eingabe": [
                     {
-                        "Preise": "none",
+                        "Preise": preise_value,
                         "Bestand": "false",
                         "Sprache_list": sprache_list,
                         "Verkaeufer": [

@@ -21,7 +21,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from . import database, gs1_exporter, gs1_mapping, pim_reader, sap_database, validator
+from . import database, gs1_exporter, gs1_mapping, pim_reader, sap_database, snapshot, validator
 
 load_dotenv()
 
@@ -53,6 +53,15 @@ _SUM_ALL_NUMBERS_PICKS = {"7.041"}
 # silently mis-resolves any not yet added to it as FALSE (found live on
 # 2026-08-31: 27 real FSC_* codes not in the crosswalk).
 _FSC_SUBSTRING_PICKS = {"4.226"}
+
+# packagingInformationModule (GS1 error 500.061) - fixed value, EGLO's
+# standard packaging is a box ("BX"), same reasoning as
+# variableTradeItemInformationModule (no per-article source). Translations
+# match the real GS1-portal reference export (matnr 43706) verbatim; only
+# covers the GS1 languages this app actually emits (see language_mapping.json
+# - en/nl/fr), "BOX" as a fallback for anything else.
+_PACKAGING_TYPE_CODE = "BX"
+_PACKAGING_TYPE_DESCRIPTIONS_BY_GS1_CODE = {"en": "BOX", "fr": "BOITE", "nl": "DOOS"}
 
 GS1_SENDER_GLN = os.getenv("GS1_SENDER_GLN", "")
 GS1_SENDER_PARTY_NAME = os.getenv("GS1_SENDER_PARTY_NAME", "EGLO")
@@ -109,6 +118,29 @@ def _dimension_in_mm(value, unit: str) -> Optional[int]:
     return mm if mm > 0 else None
 
 
+def _package_dimension_in_mm(value) -> Optional[int]:
+    """ZZEVLAE/ZZEVBRE/ZZEVTIE (individual-packaging length/width/depth) have
+    no companion unit field like MEABM - assumed to already be stored in
+    millimetres. Live-verified 2026-09-23 (see sap_database.
+    get_material_measurements' docstring): the mm assumption checks out
+    against MARA.VOLUM for 3 real articles."""
+    if value is None:
+        return None
+    mm = round(float(value))
+    return mm if mm > 0 else None
+
+
+# File extension -> GS1 fileFormatName, matching the casing seen in the real
+# GS1-portal reference export ("Jpeg" for a .JPEG file). Falls back to the
+# extension itself (capitalised) for anything not seen in practice yet.
+_FILE_FORMAT_NAMES = {"jpg": "Jpeg", "jpeg": "Jpeg", "png": "Png", "pdf": "Pdf"}
+
+
+def _file_format_name(filename: str) -> str:
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return _FILE_FORMAT_NAMES.get(ext, ext.capitalize())
+
+
 def _build_sap_extension_modules(
     hana_conn,
     matnr: str,
@@ -128,9 +160,26 @@ def _build_sap_extension_modules(
 
     measurements = sap_database.get_material_measurements(hana_conn, matnr)
     if measurements:
-        depth = _dimension_in_mm(measurements["length"], measurements["dimension_unit"])
-        width = _dimension_in_mm(measurements["width"], measurements["dimension_unit"])
-        height = _dimension_in_mm(measurements["height"], measurements["dimension_unit"])
+        # ZZEVLAE(length)/ZZEVBRE(width)/ZZEVTIE(depth) preferred over
+        # LAENG/BREIT/HOEHE - mirrors the LAENG->depth/HOEHE->height mapping
+        # structurally, but note ZZEVTIE is SAP's own "Tiefe" (depth) field
+        # mapped here to GS1 "height", same positional convention as before.
+        # The mm-unit assumption is live-verified (see sap_database.
+        # get_material_measurements' docstring); the depth/height axis
+        # assignment itself is still a best guess - user confirmed 2026-09-23
+        # to ship with it rather than block on further verification.
+        depth = (
+            _package_dimension_in_mm(measurements.get("package_length"))
+            or _dimension_in_mm(measurements["length"], measurements["dimension_unit"])
+        )
+        width = (
+            _package_dimension_in_mm(measurements.get("package_width"))
+            or _dimension_in_mm(measurements["width"], measurements["dimension_unit"])
+        )
+        height = (
+            _package_dimension_in_mm(measurements.get("package_depth"))
+            or _dimension_in_mm(measurements["height"], measurements["dimension_unit"])
+        )
         gross_weight = _weight_in_grams(measurements["gross_weight"], measurements["weight_unit"])
         net_weight = _weight_in_grams(measurements["net_weight"], measurements["weight_unit"])
         if any(v is not None for v in (depth, width, height, gross_weight, net_weight)):
@@ -207,7 +256,7 @@ def _resolve_crosswalk_value(conn, pickid: str, pim_codes: list[str]) -> Optiona
 
 def export_batch(
     matnrs: list[str], lang_codes: list[str], vkorg: str = "", exported_by: Optional[str] = None,
-    werks: str = "",
+    werks: str = "", record_history: bool = True, snapshots: Optional[dict] = None,
 ) -> tuple[bytes, list[str], list[dict]]:
     """Build a combined GS1 XML document for *matnrs*.
 
@@ -461,16 +510,40 @@ def export_batch(
                 )
             )
 
-            # marketingInformationModule/tradeItemMarketingMessage - placeholder
-            # source MAKTX (SAP material short text) via the Postgres PIM-values
-            # table, confirmed by the user 2026-09-03 as a stand-in until the
-            # real marketing-copy field is identified (see
+            # referencedFileDetailInformationModule - primary product image
+            # only for now (asset_code 101/VIEW), see
+            # database.get_primary_product_image's docstring. Other asset
+            # types (DETAIL/DIMENSION/AMBIENT images, 360 video) deliberately
+            # parked, user to clarify their referencedFileTypeCode later.
+            image = gs1_mapping.get_primary_product_image(conn, matnr)
+            if image:
+                extension_modules.append(
+                    gs1_exporter.build_referenced_file_detail_information_module_element(
+                        file_type_code="PRODUCT_IMAGE",
+                        file_format_name=_file_format_name(image["filename"]),
+                        file_name=image["filename"],
+                        uri=image["url"],
+                        is_primary_file=True,
+                        media_source_gln=GS1_SENDER_GLN,
+                    )
+                )
+            else:
+                logger.info(
+                    "GS1 EXPORT | matnr=%s: kein VIEW-Bild gefunden, "
+                    "referencedFileDetailInformationModule wird ausgelassen",
+                    matnr,
+                )
+
+            # marketingInformationModule/tradeItemMarketingMessage - source
+            # PIM_ARTIKELTEXT (pim_catalog_textarea), confirmed by the user
+            # 2026-09-23 as the real flowing marketing-copy field, replacing
+            # the earlier MAKTX (SAP material short text) placeholder - see
             # gs1_exporter.build_marketing_information_module_element's
-            # docstring). Uses the same PIM-locale convention as
+            # docstring. Uses the same PIM-locale convention as
             # propertyDescription (language_mapping.json), not SAP's spras.
             marketing_texts_by_language: dict[str, str] = {}
             for lang_code, lang_cfg in languages:
-                text = gs1_mapping.get_pim_catalog_text_value(conn, matnr, "MAKTX", lang_cfg["pim_locale"])
+                text = gs1_mapping.get_pim_catalog_textarea_value(conn, matnr, "PIM_ARTIKELTEXT", lang_cfg["pim_locale"])
                 if text:
                     marketing_texts_by_language[lang_cfg["gs1_code"]] = text
             if marketing_texts_by_language:
@@ -479,15 +552,23 @@ def export_batch(
                 )
             else:
                 logger.info(
-                    "GS1 EXPORT | matnr=%s: kein MAKTX-Text (Postgres) gefunden, "
+                    "GS1 EXPORT | matnr=%s: kein PIM_ARTIKELTEXT gefunden, "
                     "marketingInformationModule wird ausgelassen",
                     matnr,
                 )
 
-            # Fixed-value modules (GS1 errors G1013/G1004) - no per-article source
-            # exists for either yet, see the builder functions' docstrings.
+            # Fixed-value modules (GS1 errors G1013/G1004/500.061) - no
+            # per-article source exists for any of these yet, see the builder
+            # functions' docstrings.
             extension_modules.append(gs1_exporter.build_variable_trade_item_information_module_element(False))
             extension_modules.append(gs1_exporter.build_delivery_purchasing_information_module_element())
+            packaging_descriptions = {
+                lang_cfg["gs1_code"]: _PACKAGING_TYPE_DESCRIPTIONS_BY_GS1_CODE.get(lang_cfg["gs1_code"], "BOX")
+                for _, lang_cfg in languages
+            }
+            extension_modules.append(
+                gs1_exporter.build_packaging_information_module_element(_PACKAGING_TYPE_CODE, packaging_descriptions)
+            )
 
             trade_item = gs1_exporter.build_trade_item_element(
                 matnr=matnr,
@@ -504,7 +585,14 @@ def export_batch(
             )
             catalogue_item = gs1_exporter.build_catalogue_item_element(trade_item)
             notifications.append(gs1_exporter.build_notification_element(catalogue_item, sender_gln=GS1_SENDER_GLN))
-            database.upsert_export_history(conn, matnr, brick_id, pim_updated_at, exported_by)
+            values = snapshot.snapshot_trade_item(trade_item)
+            if snapshots is not None:
+                snapshots[matnr] = values
+            if record_history:
+                # params: needed to rebuild the article identically for the change report
+                export_params = {"lang_codes": lang_codes, "vkorg": vkorg, "werks": werks}
+                database.upsert_export_history(conn, matnr, brick_id, pim_updated_at, exported_by,
+                                               {"params": export_params, "values": values})
     finally:
         conn.close()
         if hana_conn is not None:
@@ -539,7 +627,32 @@ def get_changed_articles() -> list[dict]:
         conn.close()
 
 
-def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str], xml_bytes: bytes) -> None:
+def get_article_changes(matnr: str) -> Optional[list[dict]]:
+    """What changed for *matnr* since its last GS1 export: the article is rebuilt
+    with the same languages/VKORG/plant as back then (nothing is written) and
+    compared value by value with the stored snapshot. None if the export has
+    no snapshot yet (exported before this feature existed)."""
+    try:
+        conn = database.get_connection()
+    except Exception as exc:
+        raise PipelineError(f"Datenbankverbindung fehlgeschlagen: {exc}") from exc
+    try:
+        stored = database.get_export_snapshot(conn, matnr)
+        if stored is None:
+            return None
+        names = database.get_pick_names(conn, stored["brick_id"]) if stored.get("brick_id") else {}
+    finally:
+        conn.close()
+
+    params = stored.get("params", {})
+    current: dict = {}
+    export_batch([matnr], params.get("lang_codes", []), params.get("vkorg", ""), None, params.get("werks", ""),
+                 record_history=False, snapshots=current)
+    return snapshot.diff_snapshots(stored.get("values", {}), current.get(matnr, {}), names)
+
+
+def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str], xml_bytes: bytes,
+                     issues: Optional[list[dict]] = None) -> None:
     """Archive a generated GS1 XML file so exported_by can find/re-download it
     later, see get_export_file()/list_export_files(). Swallows DB-connection
     failures (logs only) rather than raising - saving an already-successful
@@ -551,7 +664,7 @@ def save_export_file(filename: str, exported_by: Optional[str], matnrs: list[str
         return
 
     try:
-        database.save_export_file(conn, filename, exported_by, matnrs, xml_bytes)
+        database.save_export_file(conn, filename, exported_by, matnrs, xml_bytes, issues)
     finally:
         conn.close()
 
