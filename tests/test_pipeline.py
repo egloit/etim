@@ -310,6 +310,23 @@ def test_marketing_text_falls_back_to_nl_be(monkeypatch, product):
     assert b"Deze hanglamp ..." in xml_bytes
 
 
+def test_dimmable_type_falls_back_to_not_dimmable(monkeypatch, product):
+    """8.492 empty in PIM_dimmable_with, but ZZDIMMR = N -> 'niet_dimbaar'."""
+    product = dict(product); product["values"] = dict(product["values"])
+    product["values"]["ZZDIMMR"] = [{"data": "ZZDIMMR_N", "scope": None, "locale": None, "attribute_type": "pim_catalog_simpleselect"}]
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10008404")
+    monkeypatch.setattr(database, "get_active_mappings", lambda conn, brick_id: [{"pickid": "8.492", "pimfeld": "PIM_dimmable_with"}])
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyCode")
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_exact", lambda conn, pick_id, code: None)
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_wildcard", lambda conn, pick_id: None)
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["nl"])
+
+    assert b"<propertyCode>niet_dimbaar</propertyCode>" in xml_bytes
+
+
 def test_batteries_included_from_zzakkjn():
     assert pipeline._batteries_included(["ZZAKKJN_J"]) is True
     assert pipeline._batteries_included(["ZZAKKJN_N"]) is False

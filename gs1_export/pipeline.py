@@ -54,6 +54,12 @@ _SUM_ALL_NUMBERS_PICKS = {"7.041"}
 # 2026-08-31: 27 real FSC_* codes not in the crosswalk).
 _FSC_SUBSTRING_PICKS = {"4.226"}
 
+# Code picks whose source field is often empty but a second PIM field still
+# settles the value: {pick: (field, {raw code: GS1 code})}. 8.492 Dimmable
+# Type is mandatory once a light source is included (Benelux rule 520.800);
+# "not dimmable" is known from ZZDIMMR even when PIM_dimmable_with is unset.
+_CODE_FALLBACKS = {"8.492": ("ZZDIMMR", {"ZZDIMMR_N": "niet_dimbaar"})}
+
 # packagingInformationModule (GS1 error 500.061) - fixed value, EGLO's
 # standard packaging is a box ("BX"), same reasoning as
 # variableTradeItemInformationModule (no per-article source). Translations
@@ -471,6 +477,9 @@ def export_batch(
                         code_value = "TRUE" if any("FSC" in c.upper() for c in pim_codes) else "FALSE"
                     else:
                         code_value = _resolve_crosswalk_value(conn, pickid, pim_codes)
+                    if not code_value and pickid in _CODE_FALLBACKS:
+                        field, codes = _CODE_FALLBACKS[pickid]
+                        code_value = next((codes[c] for c in pim_reader.get_pim_raw_codes(product, field) if c in codes), None)
                     if not code_value:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s pim_codes=%s: kein "
