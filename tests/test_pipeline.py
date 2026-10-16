@@ -60,6 +60,13 @@ def _stub_marketing_text(monkeypatch):
     monkeypatch.setattr(database, "get_pim_catalog_textarea_value", lambda conn, matnr, attribute_code, locale: None)
 
 
+@pytest.fixture(autouse=True)
+def _stub_option_labels(monkeypatch):
+    """No ZZTYPEN option labels by default (functionalName falls back to the
+    shortened description) - see the functionalName tests below."""
+    monkeypatch.setattr(database, "get_attribute_option_labels", lambda conn, attribute, code: {})
+
+
 def _trade_items(xml_bytes):
     root = etree.fromstring(xml_bytes)
     return root.findall(f".//transaction/documentCommand/{{{NS_CIN}}}catalogueItemNotification/catalogueItem/tradeItem")
@@ -1088,3 +1095,26 @@ def test_export_batch_warns_when_hana_connection_fails(monkeypatch, product):
     _, warnings, _ = pipeline.export_batch(["62053"], ["eng"])
 
     assert any("SAP-HANA-Verbindung" in w for w in warnings)
+
+
+def test_functional_names_from_zztypen_labels(monkeypatch):
+    labels = {"de_DE": "[HAL] Hängeleuchte", "en_US": "[HAL] pendant light", "nl_BE": "[HAL] hanglamp", "fr_FR": "[HAL] -"}
+    monkeypatch.setattr(database, "get_attribute_option_labels", lambda conn, attribute, code: labels)
+    config = {
+        "ger": {"pim_locale": "de_DE", "gs1_code": "de"},
+        "eng": {"pim_locale": "en_GB", "gs1_code": "en", "pim_fallback": ["en_US"]},
+        "nl": {"pim_locale": "nl_NL", "gs1_code": "nl", "pim_fallback": ["nl_BE"]},
+        "fr": {"pim_locale": "fr_FR", "gs1_code": "fr"},
+    }
+
+    names = pipeline._functional_names(None, "ZZTYPEN_HAL", config)
+
+    # fallback locales used, first letter capitalised, "-" placeholder skipped
+    assert names == {"de": "Hängeleuchte", "en": "Pendant light", "nl": "Hanglamp"}
+
+
+def test_shorten_cuts_at_blank_within_35_chars():
+    text = "LED-HL 2 RINGEN, CHROOM/KRISTAL'VARRAZO'"
+    assert len(text) == 40
+    assert pipeline._shorten(text) == "LED-HL 2 RINGEN"
+    assert pipeline._shorten("kurz") == "kurz"

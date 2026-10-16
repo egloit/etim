@@ -317,6 +317,35 @@ def get_manual_property_value(conn: psycopg.Connection, matnr: str, pick_id: str
         return None
 
 
+def get_attribute_option_labels(conn: psycopg.Connection, attribute: str, code: str) -> dict[str, str]:
+    """{PIM locale (e.g. nl_NL): label} of a PIM select option, from
+    public.pim_egloakeneo_attributeoptions (columns labels_<locale>). Empty
+    if the option or table is missing."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM public.pim_egloakeneo_attributeoptions
+                WHERE attribute = %s AND code = %s
+                LIMIT 1
+                """,
+                (attribute, code),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return {}
+            out = {}
+            for col, value in zip((d.name for d in cur.description), row):
+                if col.startswith("labels_") and value:
+                    lang, _, region = col[len("labels_"):].partition("_")
+                    out[f"{lang}_{region.upper()}" if region else lang] = value
+            return out
+    except psycopg.errors.UndefinedTable:
+        logger.warning("pim_egloakeneo_attributeoptions existiert noch nicht - Options-Labels nicht bestimmbar.")
+        return {}
+
+
 def get_pim_value_crosswalk(conn: psycopg.Connection, pick_id: str, pim_code: str) -> Optional[str]:
     """Translate a raw PIM select code (e.g. "ZZTYPEN_WAL") into the GS1
     propertyCode value for a specific Pick, via public.gs1_pim_value_crosswalk.

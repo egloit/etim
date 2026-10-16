@@ -16,6 +16,7 @@ remaining articles are still processed.
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -155,6 +156,7 @@ def _build_sap_extension_modules(
     sap_language_config: dict,
     country_code_config: dict,
     pim_descriptions: Optional[dict[str, str]] = None,
+    functional_names: Optional[dict[str, str]] = None,
 ) -> list:
     """Measurements/description/origin extension modules sourced from SAP
     HANA rather than the PIM - see sap_database.py. hana_conn is None if the
@@ -216,10 +218,12 @@ def _build_sap_extension_modules(
         modules.append(
             gs1_exporter.build_trade_item_description_module_element(
                 descriptions_by_language=descriptions_by_language,
-                # MAKTX reused as a placeholder for functionalName too - not a real
-                # "product function" text (see e.g. "WALL LIGHT" in the GS1
-                # reference export), kept until a better source is identified.
-                functional_names_by_language=descriptions_by_language,
+                # Product type from ZZTYPEN (see _functional_names); the article
+                # text, cut to 35 characters, only where no label exists.
+                functional_names_by_language={
+                    lang: (functional_names or {}).get(lang) or _shorten(text)
+                    for lang, text in descriptions_by_language.items()
+                },
                 brand_name="EGLO",
             )
         )
@@ -284,6 +288,37 @@ def _pim_descriptions(product: dict, language_config: dict) -> dict[str, str]:
         text = next((t.strip() for loc in _pim_locales(cfg) if (t := translations.get(loc)) and t.strip()), "")
         if text and text != german:
             out[cfg["gs1_code"]] = text
+    return out
+
+
+_FUNCTIONAL_NAME_MAX = 35  # shared_common:Description35Type
+
+
+def _shorten(text: str, max_len: int = _FUNCTIONAL_NAME_MAX) -> str:
+    """Cut text to max_len, at the last blank if there is one."""
+    text = text.strip()
+    if len(text) <= max_len:
+        return text
+    cut = text[:max_len]
+    return (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip(" ,;/-")
+
+
+def _functional_names(conn, zztypen_code: str, language_config: dict) -> dict[str, str]:
+    """{gs1 languageCode: product type} for functionalName from the
+    translated PIM labels of the ZZTYPEN option ("[HAL] hanglamp" ->
+    "Hanglamp"). GS1 Benelux 3.005: one word answering "what is it?",
+    max 35 characters - the article text (MAKTX) is too long (GS1 SCHEMA
+    error for 31667)."""
+    labels = database.get_attribute_option_labels(conn, "ZZTYPEN", zztypen_code)
+    out = {}
+    for code, cfg in language_config.items():
+        if code.startswith("_"):
+            continue
+        for loc in _pim_locales(cfg):
+            text = re.sub(r"^\[\w+\]\s*", "", labels.get(loc) or "").strip()
+            if text and text != "-":
+                out[cfg["gs1_code"]] = _shorten(text[0].upper() + text[1:])
+                break
     return out
 
 
@@ -621,6 +656,7 @@ def export_batch(
                 _build_sap_extension_modules(
                     hana_conn, matnr, werks.strip(), languages, sap_language_config, country_code_config,
                     pim_descriptions=_pim_descriptions(product, language_config),
+                    functional_names=_functional_names(conn, zztypen_code, language_config),
                 )
             )
 
