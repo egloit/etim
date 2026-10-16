@@ -8,6 +8,7 @@ export.
 """
 import logging
 import os
+import pathlib
 
 from lxml import etree
 
@@ -19,6 +20,27 @@ _schema: etree.XMLSchema | None = None
 _schema_load_attempted = False
 
 
+def _wrapper_schema(root_path: str) -> etree._ElementTree:
+    """Schema importing the root XSD plus every *Module.xsd next to it.
+
+    Extension modules sit in an xsd:any wildcard (processContents lax) and lxml
+    ignores xsi:schemaLocation, so a module whose XSD isn't imported here is
+    not validated at all (e.g. functionalName > 35 chars slipped through).
+    """
+    root_dir = os.path.dirname(os.path.abspath(root_path))
+    targets = {}
+    for name in [os.path.basename(root_path)] + sorted(
+            f for f in os.listdir(root_dir) if f.endswith("Module.xsd")):
+        path = os.path.join(root_dir, name)
+        targets[etree.parse(path).getroot().get("targetNamespace")] = path
+    xs = "http://www.w3.org/2001/XMLSchema"
+    wrapper = etree.Element(f"{{{xs}}}schema")
+    for ns, path in targets.items():
+        etree.SubElement(wrapper, f"{{{xs}}}import", namespace=ns,
+                         schemaLocation=pathlib.Path(path).as_uri())
+    return etree.ElementTree(wrapper)
+
+
 def _load_schema() -> etree.XMLSchema | None:
     global _schema, _schema_load_attempted
     if _schema_load_attempted:
@@ -27,7 +49,7 @@ def _load_schema() -> etree.XMLSchema | None:
     if not GS1_XSD_ROOT:
         return None
     try:
-        _schema = etree.XMLSchema(etree.parse(GS1_XSD_ROOT))
+        _schema = etree.XMLSchema(_wrapper_schema(GS1_XSD_ROOT))
     except (OSError, etree.XMLSchemaParseError) as exc:
         logger.error("GS1 XSD ROOT konnte nicht geladen werden (%s): %s", GS1_XSD_ROOT, exc)
         _schema = None
