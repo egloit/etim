@@ -7,6 +7,7 @@ Every entry under product["values"][<field_code>] already carries its own
 the shape from the data.
 """
 import re
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
 _MULTISELECT = "pim_catalog_multiselect"
@@ -14,6 +15,12 @@ _SIMPLESELECT = "pim_catalog_simpleselect"
 _METRIC = "pim_catalog_metric"
 
 _NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
+
+
+def round_half_up(text: str) -> int:
+    """"4,5" / "4.5" -> 5, "2.6" -> 3, "2.4" -> 2 - commercial rounding (Python's
+    round() would give 4 for 4.5). Raises ValueError/ArithmeticError if not a number."""
+    return int(Decimal(text.strip().replace(",", ".")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def _find_entries(product: dict, field_code: str) -> Optional[list]:
@@ -162,8 +169,8 @@ def get_pim_number_as_int(product: dict, field_code: str) -> Optional[int]:
     Tolerant of real-world formatting seen in this PIM: comma decimal
     separators ("32,5") and unit-text glued onto the value ("10W" for
     PIM_MAX_POWER_INCL_TRANSFORMER) - extracts the first numeric substring
-    rather than requiring the whole field to be a clean number. Truncates
-    (doesn't round): "32,5" -> 32."""
+    rather than requiring the whole field to be a clean number. Rounds half
+    up: "32,5" -> 33, "2,6" -> 3."""
     value = get_pim_value(product, field_code)
     if value is None:
         return None
@@ -174,8 +181,8 @@ def get_pim_number_as_int(product: dict, field_code: str) -> Optional[int]:
     if not match:
         return None
     try:
-        return int(float(match.group().replace(",", ".")))
-    except ValueError:
+        return round_half_up(match.group())
+    except (ValueError, ArithmeticError):
         return None
 
 
@@ -195,8 +202,8 @@ def get_pim_number_sum_as_int(product: dict, field_code: str) -> Optional[int]:
     if not matches:
         return None
     try:
-        return int(sum(float(m.replace(",", ".")) for m in matches))
-    except ValueError:
+        return round_half_up(str(sum(Decimal(m.replace(",", ".")) for m in matches)))
+    except (ValueError, ArithmeticError):
         return None
 
 

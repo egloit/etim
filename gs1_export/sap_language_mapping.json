@@ -1,5 +1,6 @@
 {
-  "_comment": "Bildet SAPs eigene Sprachcodes (MAKT.SPRAS) auf den GS1 languageCode ab - nur die im Formular waehlbaren Sprachen (siehe language_mapping.json). SPRAS 'N' (Niederlaendisch) ist bei vielen Artikeln nur eine Kopie des deutschen Texts, keine echte Uebersetzung - siehe sap_database.get_material_descriptions.",
+  "_comment": "Bildet SAPs eigene Sprachcodes (MAKT.SPRAS) auf den GS1 languageCode ab - nur die im Formular waehlbaren Sprachen (siehe language_mapping.json). SPRAS 'N' (Niederlaendisch) ist bei vielen Artikeln nur eine Kopie des deutschen Texts, keine echte Uebersetzung - siehe sap_database.get_material_descriptions. 'D' (de) ergaenzt 2026-10-15 fuer Belgien (Benelux-Regel 500.655: functionalName auch auf Deutsch).",
+  "D": "de",
   "E": "en",
   "N": "nl",
   "F": "fr"

@@ -60,6 +60,13 @@ def _stub_marketing_text(monkeypatch):
     monkeypatch.setattr(database, "get_pim_catalog_textarea_value", lambda conn, matnr, attribute_code, locale: None)
 
 
+@pytest.fixture(autouse=True)
+def _stub_option_labels(monkeypatch):
+    """No ZZTYPEN option labels by default (functionalName falls back to the
+    shortened description) - see the functionalName tests below."""
+    monkeypatch.setattr(database, "get_attribute_option_labels", lambda conn, attribute, code: {})
+
+
 def _trade_items(xml_bytes):
     root = etree.fromstring(xml_bytes)
     return root.findall(f".//transaction/documentCommand/{{{NS_CIN}}}catalogueItemNotification/catalogueItem/tradeItem")
@@ -224,6 +231,113 @@ def test_export_batch_skips_property_string_without_manual_entry(monkeypatch, pr
         "/additionalTradeItemClassificationValue/additionalTradeItemClassificationProperty"
     )
     assert props == []
+
+
+def test_export_batch_measurement_falls_back_to_manual_value(monkeypatch, product):
+    """Empty PIM field -> stopgap value from gs1_manual_property_values (webcenter)."""
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "4.162", "pimfeld": "FIELD_NOT_IN_PIM"}],
+    )
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyMeasurement")
+    monkeypatch.setattr(database, "get_measurement_unit_code", lambda conn, brick_id, pick_id: "HUR")
+    monkeypatch.setattr(
+        database, "get_manual_property_value",
+        lambda conn, matnr, pick_id: "25000" if pick_id == "4.162" else None,
+    )
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    props = _trade_items(xml_bytes)[0].findall(
+        "gdsnTradeItemClassification/additionalTradeItemClassification"
+        "/additionalTradeItemClassificationValue/additionalTradeItemClassificationProperty"
+    )
+    assert len(props) == 1
+    measurement = props[0].find("propertyMeasurement")
+    assert measurement.text == "25000"
+    assert measurement.get("measurementUnitCode") == "HUR"
+
+
+def test_export_batch_builds_diameter_and_battery_modules(monkeypatch, product):
+    """8.355 from the manual table (PIM empty), 4.292 from the Bebat code fallback."""
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(
+        database, "get_active_mappings",
+        lambda conn, brick_id: [{"pickid": "8.355", "pimfeld": "FIELD_NOT_IN_PIM"},
+                                {"pickid": "4.292", "pimfeld": "FIELD_NOT_IN_PIM_EITHER"}],
+    )
+    types = {"8.355": "lightBulbDiameterValue", "4.292": "areBatteriesIncluded"}
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: types[pick_id])
+    manual = {"8.355": "60", "4.651": "B106010726"}
+    monkeypatch.setattr(database, "get_manual_property_value", lambda conn, matnr, pick_id: manual.get(pick_id))
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["eng"])
+
+    item = _trade_items(xml_bytes)[0]
+    assert item.findtext(".//{*}lightingDeviceModule/lightBulbInformation/lightBulbDiameterValue") == "60"
+    # 'true' needs batteryDetail (Benelux 500.415) - not sent until we have it
+    assert item.find(".//{*}batteryInformationModule") is None
+    props = item.findall(".//additionalTradeItemClassificationProperty")
+    assert props == []
+
+
+def test_pim_descriptions_only_real_translations():
+    cfg = {"_comment": "x", "nl": {"pim_locale": "nl_NL", "gs1_code": "nl", "pim_fallback": ["nl_BE"]},
+           "fr": {"pim_locale": "fr_FR", "gs1_code": "fr"}, "eng": {"pim_locale": "en_GB", "gs1_code": "en", "pim_fallback": ["en_US"]},
+           "ger": {"pim_locale": "de_DE", "gs1_code": "de"}}
+    product = {"values": {"MAKTX": [
+        {"locale": "de_DE", "data": "LED-HL CHROM/WEISS 'LASANA'", "attribute_type": "pim_catalog_text"},
+        {"locale": "nl_NL", "data": "LED-HL CHROOM/WIT 'LASANA'", "attribute_type": "pim_catalog_text"},
+        {"locale": "fr_FR", "data": "LED-HL CHROM/WEISS 'LASANA'", "attribute_type": "pim_catalog_text"},
+        {"locale": "en_US", "data": "LED-PL CHROME/WHITE 'LASANA'", "attribute_type": "pim_catalog_text"},
+    ]}}
+    # fr is only the German copy -> left to SAP; en via fallback en_US; de stays SAP
+    assert pipeline._pim_descriptions(product, cfg) == {"nl": "LED-HL CHROOM/WIT 'LASANA'", "en": "LED-PL CHROME/WHITE 'LASANA'"}
+
+
+def test_marketing_text_falls_back_to_nl_be(monkeypatch, product):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(database, "get_active_mappings", lambda conn, brick_id: [{"pickid": "4.651", "pimfeld": "(manual)"}])
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyString")
+    monkeypatch.setattr(database, "get_manual_property_value", lambda conn, matnr, pick_id: None)
+    monkeypatch.setattr(
+        database, "get_pim_catalog_textarea_value",
+        lambda conn, matnr, attribute_code, locale: "Deze hanglamp ..." if locale == "nl_BE" else None,
+    )
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["nl"])
+
+    assert b"Deze hanglamp ..." in xml_bytes
+
+
+def test_dimmable_type_falls_back_to_not_dimmable(monkeypatch, product):
+    """8.492 empty in PIM_dimmable_with, but ZZDIMMR = N -> 'niet_dimbaar'."""
+    product = dict(product); product["values"] = dict(product["values"])
+    product["values"]["ZZDIMMR"] = [{"data": "ZZDIMMR_N", "scope": None, "locale": None, "attribute_type": "pim_catalog_simpleselect"}]
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10008404")
+    monkeypatch.setattr(database, "get_active_mappings", lambda conn, brick_id: [{"pickid": "8.492", "pimfeld": "PIM_dimmable_with"}])
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyCode")
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_exact", lambda conn, pick_id, code: None)
+    monkeypatch.setattr(database, "get_pim_value_crosswalk_wildcard", lambda conn, pick_id: None)
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["nl"])
+
+    assert b"<propertyCode>niet_dimbaar</propertyCode>" in xml_bytes
+
+
+def test_batteries_included_from_zzakkjn():
+    assert pipeline._batteries_included(["ZZAKKJN_J"]) is True
+    assert pipeline._batteries_included(["ZZAKKJN_N"]) is False
+    assert pipeline._batteries_included([]) is None
 
 
 def test_export_batch_builds_lighting_device_module_when_pim_fas_05_1_present(monkeypatch, product):
@@ -981,3 +1095,26 @@ def test_export_batch_warns_when_hana_connection_fails(monkeypatch, product):
     _, warnings, _ = pipeline.export_batch(["62053"], ["eng"])
 
     assert any("SAP-HANA-Verbindung" in w for w in warnings)
+
+
+def test_functional_names_from_zztypen_labels(monkeypatch):
+    labels = {"de_DE": "[HAL] Hängeleuchte", "en_US": "[HAL] pendant light", "nl_BE": "[HAL] hanglamp", "fr_FR": "[HAL] -"}
+    monkeypatch.setattr(database, "get_attribute_option_labels", lambda conn, attribute, code: labels)
+    config = {
+        "ger": {"pim_locale": "de_DE", "gs1_code": "de"},
+        "eng": {"pim_locale": "en_GB", "gs1_code": "en", "pim_fallback": ["en_US"]},
+        "nl": {"pim_locale": "nl_NL", "gs1_code": "nl", "pim_fallback": ["nl_BE"]},
+        "fr": {"pim_locale": "fr_FR", "gs1_code": "fr"},
+    }
+
+    names = pipeline._functional_names(None, "ZZTYPEN_HAL", config)
+
+    # fallback locales used, first letter capitalised, "-" placeholder skipped
+    assert names == {"de": "Hängeleuchte", "en": "Pendant light", "nl": "Hanglamp"}
+
+
+def test_shorten_cuts_at_blank_within_35_chars():
+    text = "LED-HL 2 RINGEN, CHROOM/KRISTAL'VARRAZO'"
+    assert len(text) == 40
+    assert pipeline._shorten(text) == "LED-HL 2 RINGEN"
+    assert pipeline._shorten("kurz") == "kurz"

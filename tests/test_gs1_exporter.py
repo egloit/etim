@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from lxml import etree
 
 from gs1_export.gs1_exporter import (
@@ -20,6 +22,7 @@ from gs1_export.gs1_exporter import (
     build_document,
     build_duty_fee_tax_information_module_element,
     build_integer_property_element,
+    build_battery_information_module_element,
     build_lighting_device_module_element,
     build_marketing_information_module_element,
     build_measurement_property_element,
@@ -153,6 +156,42 @@ def test_build_lighting_device_module_element():
     declared_power = module.find("lightBulbInformation/declaredPower")
     assert declared_power.text == "10"
     assert declared_power.get("measurementUnitCode") == "WTT"
+
+
+_GDSN_SCHEMAS = Path(__file__).resolve().parent.parent / "gs1_export" / "schema" / "gs1" / "gdsn"
+
+
+def _assert_valid_against(module, xsd_name):
+    schema = etree.XMLSchema(etree.parse(str(_GDSN_SCHEMAS / xsd_name)))
+    assert schema.validate(etree.ElementTree(module)), schema.error_log
+
+
+def test_lighting_device_module_with_diameter_is_xsd_valid():
+    module = build_lighting_device_module_element(9, "WTT", bulb_diameter=60)
+    info = module.find("lightBulbInformation")
+    assert [etree.QName(c).localname for c in info] == ["lightBulbDiameterValue", "declaredPower"]
+    assert info.find("lightBulbDiameterValue").get("measurementUnitCode") == "MMT"
+    _assert_valid_against(module, "LightingDeviceModule.xsd")
+    only_diameter = build_lighting_device_module_element(None, bulb_diameter=45)
+    assert only_diameter.find("lightBulbInformation/declaredPower") is None
+    _assert_valid_against(only_diameter, "LightingDeviceModule.xsd")
+
+
+def test_lighting_device_module_with_visible_light_is_xsd_valid():
+    module = build_lighting_device_module_element(15, "WTT", visible_light=1900, light_beam_type_code="SPHERE")
+    info = module.find("lightBulbInformation")
+    assert [etree.QName(c).localname for c in info] == ["visibleLight", "declaredPower", "lightBeamTypeCode"]
+    assert info.find("visibleLight").get("measurementUnitCode") == "LUM"
+    _assert_valid_against(module, "LightingDeviceModule.xsd")
+    # without a beam type the flux is not sent (Benelux rule 500.471)
+    assert build_lighting_device_module_element(15, visible_light=1900).find("lightBulbInformation/visibleLight") is None
+
+
+def test_battery_information_module_is_xsd_valid():
+    for included, text in ((True, "true"), (False, "false")):
+        module = build_battery_information_module_element(included)
+        assert module.findtext("areBatteriesIncluded") == text
+        _assert_valid_against(module, "BatteryInformationModule.xsd")
 
 
 def test_build_trade_item_element_without_extension_modules_has_no_trade_item_information():

@@ -16,6 +16,7 @@ remaining articles are still processed.
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -53,6 +54,12 @@ _SUM_ALL_NUMBERS_PICKS = {"7.041"}
 # silently mis-resolves any not yet added to it as FALSE (found live on
 # 2026-08-31: 27 real FSC_* codes not in the crosswalk).
 _FSC_SUBSTRING_PICKS = {"4.226"}
+
+# Code picks whose source field is often empty but a second PIM field still
+# settles the value: {pick: (field, {raw code: GS1 code})}. 8.492 Dimmable
+# Type is mandatory once a light source is included (Benelux rule 520.800);
+# "not dimmable" is known from ZZDIMMR even when PIM_dimmable_with is unset.
+_CODE_FALLBACKS = {"8.492": ("ZZDIMMR", {"ZZDIMMR_N": "niet_dimbaar"})}
 
 # packagingInformationModule (GS1 error 500.061) - fixed value, EGLO's
 # standard packaging is a box ("BX"), same reasoning as
@@ -148,6 +155,8 @@ def _build_sap_extension_modules(
     languages: list[tuple[str, dict]],
     sap_language_config: dict,
     country_code_config: dict,
+    pim_descriptions: Optional[dict[str, str]] = None,
+    functional_names: Optional[dict[str, str]] = None,
 ) -> list:
     """Measurements/description/origin extension modules sourced from SAP
     HANA rather than the PIM - see sap_database.py. hana_conn is None if the
@@ -201,14 +210,20 @@ def _build_sap_extension_modules(
         text = sap_descriptions.get(spras)
         if text:
             descriptions_by_language[gs1_code] = text
+    # A real PIM translation (MAKTX that isn't just the German text, see
+    # _pim_descriptions) beats SAP MAKT, whose non-German rows are often a
+    # copy of the German text (e.g. SPRAS N).
+    descriptions_by_language.update(pim_descriptions or {})
     if descriptions_by_language:
         modules.append(
             gs1_exporter.build_trade_item_description_module_element(
                 descriptions_by_language=descriptions_by_language,
-                # MAKTX reused as a placeholder for functionalName too - not a real
-                # "product function" text (see e.g. "WALL LIGHT" in the GS1
-                # reference export), kept until a better source is identified.
-                functional_names_by_language=descriptions_by_language,
+                # Product type from ZZTYPEN (see _functional_names); the article
+                # text, cut to 35 characters, only where no label exists.
+                functional_names_by_language={
+                    lang: (functional_names or {}).get(lang) or _shorten(text)
+                    for lang, text in descriptions_by_language.items()
+                },
                 brand_name="EGLO",
             )
         )
@@ -237,6 +252,84 @@ def _build_sap_extension_modules(
             )
 
     return modules
+
+
+_BEBAT_PICK = "4.651"
+_LIGHT_BEAM_PICK = "8.779"  # lightBeamTypeCode, only kept in gs1_manual_property_values (EPREL)
+
+
+def _batteries_included(codes: list[str]) -> Optional[bool]:
+    """ZZAKKJN select ("ZZAKKJN_J" / "ZZAKKJN_N") or a boolean field -> bool, None if unset."""
+    for code in codes:
+        c = code.strip().upper()
+        if c.endswith("_J") or c == "TRUE":
+            return True
+        if c.endswith("_N") or c == "FALSE":
+            return False
+    return None
+
+
+def _pim_locales(lang_cfg: dict) -> list[str]:
+    """pim_locale plus the configured fallbacks (e.g. nl_NL -> nl_BE)."""
+    return [lang_cfg["pim_locale"], *lang_cfg.get("pim_fallback", [])]
+
+
+def _pim_descriptions(product: dict, language_config: dict) -> dict[str, str]:
+    """{gs1 languageCode: MAKTX} from the PIM, only where it is a real
+    translation - non-German texts identical to MAKTX de_DE are skipped, as
+    are German ones (SAP MAKT stays the German master)."""
+    value = pim_reader.get_pim_value(product, "MAKTX")
+    translations = (value or {}).get("translations") or {}
+    german = (translations.get("de_DE") or "").strip()
+    out = {}
+    for code, cfg in language_config.items():
+        if code.startswith("_") or cfg["gs1_code"] == "de":
+            continue
+        text = next((t.strip() for loc in _pim_locales(cfg) if (t := translations.get(loc)) and t.strip()), "")
+        if text and text != german:
+            out[cfg["gs1_code"]] = text
+    return out
+
+
+_FUNCTIONAL_NAME_MAX = 35  # shared_common:Description35Type
+
+
+def _shorten(text: str, max_len: int = _FUNCTIONAL_NAME_MAX) -> str:
+    """Cut text to max_len, at the last blank if there is one."""
+    text = text.strip()
+    if len(text) <= max_len:
+        return text
+    cut = text[:max_len]
+    return (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip(" ,;/-")
+
+
+def _functional_names(conn, zztypen_code: str, language_config: dict) -> dict[str, str]:
+    """{gs1 languageCode: product type} for functionalName from the
+    translated PIM labels of the ZZTYPEN option ("[HAL] hanglamp" ->
+    "Hanglamp"). GS1 Benelux 3.005: one word answering "what is it?",
+    max 35 characters - the article text (MAKTX) is too long (GS1 SCHEMA
+    error for 31667)."""
+    labels = database.get_attribute_option_labels(conn, "ZZTYPEN", zztypen_code)
+    out = {}
+    for code, cfg in language_config.items():
+        if code.startswith("_"):
+            continue
+        for loc in _pim_locales(cfg):
+            text = re.sub(r"^\[\w+\]\s*", "", labels.get(loc) or "").strip()
+            if text and text != "-":
+                out[cfg["gs1_code"]] = _shorten(text[0].upper() + text[1:])
+                break
+    return out
+
+
+def _manual_number(conn, matnr: str, pickid: str) -> Optional[int]:
+    """Whole number from gs1_manual_property_values for matnr+Pick, rounded
+    half up like the PIM path. None if missing/not numeric."""
+    value = gs1_mapping.get_manual_property_value(conn, matnr, pickid)
+    try:
+        return pim_reader.round_half_up(value) if value else None
+    except (ValueError, ArithmeticError):
+        return None
 
 
 def _resolve_crosswalk_value(conn, pickid: str, pim_codes: list[str]) -> Optional[str]:
@@ -343,6 +436,12 @@ def export_batch(
                 continue
 
             properties = []
+            # Picks whose GDSN attribute lives in an extension module, not in
+            # additionalTradeItemClassificationProperty - collected here, the
+            # modules are built below.
+            bulb_diameter: Optional[int] = None
+            visible_light: Optional[int] = None
+            batteries_included: Optional[bool] = None
             for mapping_row in mappings:
                 pickid = mapping_row["pickid"]
                 pimfeld = mapping_row["pimfeld"]
@@ -375,19 +474,24 @@ def export_batch(
                         crosswalk_value = _resolve_crosswalk_value(conn, pickid, pim_codes)
                         if crosswalk_value:
                             try:
-                                amount = int(float(crosswalk_value.replace(",", ".")))
-                            except ValueError:
+                                amount = pim_reader.round_half_up(crosswalk_value)
+                            except (ValueError, ArithmeticError):
                                 amount = None
                     if amount is None:
                         if pickid in _SUM_ALL_NUMBERS_PICKS:
                             amount = pim_reader.get_pim_number_sum_as_int(product, pimfeld)
                         else:
                             amount = pim_reader.get_pim_number_as_int(product, pimfeld)
+                    if amount is None:
+                        # Stopgap while the PIM field is empty: value from
+                        # gs1_manual_property_values (e.g. source 'webcenter' =
+                        # read from the packaging layouts).
+                        amount = _manual_number(conn, matnr, pickid)
 
                     if amount is None:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s: kein Zahlwert (weder Crosswalk "
-                            "noch direkte Zahl), Property wird ausgelassen",
+                            "noch direkte Zahl noch gs1_manual_property_values), Property wird ausgelassen",
                             matnr, pickid, pimfeld,
                         )
                         continue
@@ -410,6 +514,9 @@ def export_batch(
                         code_value = "TRUE" if any("FSC" in c.upper() for c in pim_codes) else "FALSE"
                     else:
                         code_value = _resolve_crosswalk_value(conn, pickid, pim_codes)
+                    if not code_value and pickid in _CODE_FALLBACKS:
+                        field, codes = _CODE_FALLBACKS[pickid]
+                        code_value = next((codes[c] for c in pim_reader.get_pim_raw_codes(product, field) if c in codes), None)
                     if not code_value:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s pim_codes=%s: kein "
@@ -448,6 +555,27 @@ def export_batch(
                     properties.append(gs1_exporter.build_integer_property_element(pickid, amount))
                     continue
 
+                if gdsn_type == "lightBulbDiameterValue":
+                    bulb_diameter = pim_reader.get_pim_number_as_int(product, pimfeld)
+                    if bulb_diameter is None:
+                        bulb_diameter = _manual_number(conn, matnr, pickid)
+                    continue
+
+                if gdsn_type == "visibleLight":
+                    # 8.353 nominal useful luminous flux; PIM first, then the
+                    # stopgap table (source 'eprel' / 'webcenter')
+                    visible_light = pim_reader.get_pim_number_as_int(product, pimfeld)
+                    if visible_light is None:
+                        visible_light = _manual_number(conn, matnr, pickid)
+                    continue
+
+                if gdsn_type == "areBatteriesIncluded":
+                    batteries_included = _batteries_included(pim_reader.get_pim_raw_codes(product, pimfeld))
+                    if batteries_included is None and gs1_mapping.get_manual_property_value(conn, matnr, _BEBAT_PICK):
+                        # No J/N in the PIM, but a Bebat code = the article contains batteries.
+                        batteries_included = True
+                    continue
+
                 if gdsn_type is not None and gdsn_type != "propertyDescription":
                     logger.info(
                         "GS1 EXPORT | matnr=%s pickid=%s: GDSN-Typ '%s' noch nicht unterstuetzt "
@@ -467,7 +595,7 @@ def export_batch(
 
                 texts_by_language: dict[str, str] = {}
                 for lang_code, lang_cfg in languages:
-                    text = pim_reader.resolve_text(value, lang_cfg["pim_locale"])
+                    text = next((t for loc in _pim_locales(lang_cfg) if (t := pim_reader.resolve_text(value, loc))), None)
                     if text:
                         texts_by_language[lang_cfg["gs1_code"]] = text
 
@@ -494,19 +622,41 @@ def export_batch(
                 )
 
             declared_power = pim_reader.get_pim_number_as_int(product, "PIM_FAS_05_1")
-            if declared_power is not None:
+            beam_type = gs1_mapping.get_manual_property_value(conn, matnr, _LIGHT_BEAM_PICK) if visible_light is not None else None
+            if visible_light is not None and not beam_type:
+                logger.info(
+                    "GS1 EXPORT | matnr=%s pickid=8.353: Lichtstrom ohne Lichtstrahl-Art (8.779), "
+                    "visibleLight wird ausgelassen (Benelux-Regel 500.471)", matnr,
+                )
+            if declared_power is not None or bulb_diameter is not None or (visible_light is not None and beam_type):
                 extension_modules.append(
-                    gs1_exporter.build_lighting_device_module_element(declared_power, "WTT")
+                    gs1_exporter.build_lighting_device_module_element(
+                        declared_power, "WTT", bulb_diameter, visible_light=visible_light, light_beam_type_code=beam_type,
+                    )
                 )
             else:
                 logger.info(
-                    "GS1 EXPORT | matnr=%s: kein PIM_FAS_05_1-Wert, lightingDeviceModule wird ausgelassen",
+                    "GS1 EXPORT | matnr=%s: weder PIM_FAS_05_1 noch Lampendurchmesser, "
+                    "lightingDeviceModule wird ausgelassen",
+                    matnr,
+                )
+            # Benelux rules 500.415/500.392 (Error NL+BE): areBatteriesIncluded 'true'
+            # needs a batteryDetail with areBatteriesBuiltIn, which we have no source
+            # for yet - so only 'false' is sent for now.
+            if batteries_included is False:
+                extension_modules.append(gs1_exporter.build_battery_information_module_element(False))
+            elif batteries_included:
+                logger.info(
+                    "GS1 EXPORT | matnr=%s: Batterien enthalten, aber kein batteryDetail/areBatteriesBuiltIn "
+                    "- batteryInformationModule wird ausgelassen (Benelux-Regel 500.415)",
                     matnr,
                 )
 
             extension_modules.extend(
                 _build_sap_extension_modules(
                     hana_conn, matnr, werks.strip(), languages, sap_language_config, country_code_config,
+                    pim_descriptions=_pim_descriptions(product, language_config),
+                    functional_names=_functional_names(conn, zztypen_code, language_config),
                 )
             )
 
@@ -543,7 +693,9 @@ def export_batch(
             # propertyDescription (language_mapping.json), not SAP's spras.
             marketing_texts_by_language: dict[str, str] = {}
             for lang_code, lang_cfg in languages:
-                text = gs1_mapping.get_pim_catalog_textarea_value(conn, matnr, "PIM_ARTIKELTEXT", lang_cfg["pim_locale"])
+                # e.g. nl_NL missing but nl_BE filled -> nl_BE (pim_fallback in language_mapping.json)
+                text = next((t for loc in _pim_locales(lang_cfg)
+                             if (t := gs1_mapping.get_pim_catalog_textarea_value(conn, matnr, "PIM_ARTIKELTEXT", loc))), None)
                 if text:
                     marketing_texts_by_language[lang_cfg["gs1_code"]] = text
             if marketing_texts_by_language:
