@@ -177,6 +177,16 @@ def test_lighting_device_module_with_diameter_is_xsd_valid():
     _assert_valid_against(only_diameter, "LightingDeviceModule.xsd")
 
 
+def test_lighting_device_module_with_visible_light_is_xsd_valid():
+    module = build_lighting_device_module_element(15, "WTT", visible_light=1900, light_beam_type_code="SPHERE")
+    info = module.find("lightBulbInformation")
+    assert [etree.QName(c).localname for c in info] == ["visibleLight", "declaredPower", "lightBeamTypeCode"]
+    assert info.find("visibleLight").get("measurementUnitCode") == "LUM"
+    _assert_valid_against(module, "LightingDeviceModule.xsd")
+    # without a beam type the flux is not sent (Benelux rule 500.471)
+    assert build_lighting_device_module_element(15, visible_light=1900).find("lightBulbInformation/visibleLight") is None
+
+
 def test_battery_information_module_is_xsd_valid():
     for included, text in ((True, "true"), (False, "false")):
         module = build_battery_information_module_element(included)

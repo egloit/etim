@@ -251,6 +251,7 @@ def _build_sap_extension_modules(
 
 
 _BEBAT_PICK = "4.651"
+_LIGHT_BEAM_PICK = "8.779"  # lightBeamTypeCode, only kept in gs1_manual_property_values (EPREL)
 
 
 def _batteries_included(codes: list[str]) -> Optional[bool]:
@@ -404,6 +405,7 @@ def export_batch(
             # additionalTradeItemClassificationProperty - collected here, the
             # modules are built below.
             bulb_diameter: Optional[int] = None
+            visible_light: Optional[int] = None
             batteries_included: Optional[bool] = None
             for mapping_row in mappings:
                 pickid = mapping_row["pickid"]
@@ -524,6 +526,14 @@ def export_batch(
                         bulb_diameter = _manual_number(conn, matnr, pickid)
                     continue
 
+                if gdsn_type == "visibleLight":
+                    # 8.353 nominal useful luminous flux; PIM first, then the
+                    # stopgap table (source 'eprel' / 'webcenter')
+                    visible_light = pim_reader.get_pim_number_as_int(product, pimfeld)
+                    if visible_light is None:
+                        visible_light = _manual_number(conn, matnr, pickid)
+                    continue
+
                 if gdsn_type == "areBatteriesIncluded":
                     batteries_included = _batteries_included(pim_reader.get_pim_raw_codes(product, pimfeld))
                     if batteries_included is None and gs1_mapping.get_manual_property_value(conn, matnr, _BEBAT_PICK):
@@ -577,9 +587,17 @@ def export_batch(
                 )
 
             declared_power = pim_reader.get_pim_number_as_int(product, "PIM_FAS_05_1")
-            if declared_power is not None or bulb_diameter is not None:
+            beam_type = gs1_mapping.get_manual_property_value(conn, matnr, _LIGHT_BEAM_PICK) if visible_light is not None else None
+            if visible_light is not None and not beam_type:
+                logger.info(
+                    "GS1 EXPORT | matnr=%s pickid=8.353: Lichtstrom ohne Lichtstrahl-Art (8.779), "
+                    "visibleLight wird ausgelassen (Benelux-Regel 500.471)", matnr,
+                )
+            if declared_power is not None or bulb_diameter is not None or (visible_light is not None and beam_type):
                 extension_modules.append(
-                    gs1_exporter.build_lighting_device_module_element(declared_power, "WTT", bulb_diameter)
+                    gs1_exporter.build_lighting_device_module_element(
+                        declared_power, "WTT", bulb_diameter, visible_light=visible_light, light_beam_type_code=beam_type,
+                    )
                 )
             else:
                 logger.info(

@@ -195,13 +195,16 @@ def build_duty_fee_tax_information_module_element(
 
 def build_lighting_device_module_element(
     declared_power: Optional[int], unit_code: str = "WTT", bulb_diameter: Optional[int] = None,
-    diameter_unit_code: str = "MMT",
+    diameter_unit_code: str = "MMT", visible_light: Optional[int] = None, light_beam_type_code: Optional[str] = None,
 ) -> etree._Element:
     """tradeItemInformation/extension module for a light source: declared
     wattage (PIM_FAS_05_1, the same field already used for Pick 4.052) and
     the lamp diameter (Pick 8.355 / lightBulbDiameterValue). Either may be
-    None. Order inside lightBulbInformation per LightingDeviceModule.xsd
-    3.1.35: lightBulbDiameterValue comes before declaredPower."""
+    None. visible_light (Pick 8.353, lumen) and light_beam_type_code (8.779,
+    SPHERE/WIDE_CONE/NARROW_CONE) are only sent together - Benelux rule
+    500.471 requires the beam type once visibleLight is used. Order inside
+    lightBulbInformation per LightingDeviceModule.xsd 3.1.35:
+    lightBulbDiameterValue, visibleLight, declaredPower, lightBeamTypeCode."""
     module = etree.Element(
         f"{{{NS_LIGHTING_DEVICE}}}lightingDeviceModule",
         nsmap={"lighting_device": NS_LIGHTING_DEVICE, "xsi": NS_XSI},
@@ -212,10 +215,16 @@ def build_lighting_device_module_element(
         diameter_el = etree.SubElement(bulb_info, "lightBulbDiameterValue")
         diameter_el.set("measurementUnitCode", diameter_unit_code)
         diameter_el.text = str(bulb_diameter)
+    if visible_light is not None and light_beam_type_code:
+        visible_el = etree.SubElement(bulb_info, "visibleLight")
+        visible_el.set("measurementUnitCode", "LUM")  # Benelux rule 500.605
+        visible_el.text = str(visible_light)
     if declared_power is not None:
         declared_power_el = etree.SubElement(bulb_info, "declaredPower")
         declared_power_el.set("measurementUnitCode", unit_code)
         declared_power_el.text = str(declared_power)
+    if visible_light is not None and light_beam_type_code:
+        etree.SubElement(bulb_info, "lightBeamTypeCode").text = light_beam_type_code
     return module
 
 
