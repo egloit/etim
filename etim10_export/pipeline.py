@@ -220,7 +220,7 @@ def _mime_filename(asset: dict, image_names: Optional[str]) -> Optional[str]:
 
 def _build_product(matnr: str, product: dict, languages: list[dict], rules: RuleSet, data: dict,
                    warnings: list[str]) -> dict:
-    """*data*: prefetched {mara, origin, assets, eprel, price_row, datasheet_ok, hana}."""
+    """*data*: prefetched {mara, origin, assets, eprel, fallback, price_row, datasheet_ok, hana}."""
     first = languages[0]
     p: dict = {"matnr": matnr, "price_date": date.today().isoformat()}
 
@@ -235,7 +235,7 @@ def _build_product(matnr: str, product: dict, languages: list[dict], rules: Rule
                      if (words := [w for f in _KEYWORD_FIELDS for w in _labels(product, f, _locales(l))])}
 
     p["class_id"] = rules.class_by_zztyp[pim_reader.get_zztypen_code(product) or ""]
-    p["features"], feature_warnings = compute_features(product, p["class_id"], rules, matnr)
+    p["features"], feature_warnings = compute_features(product, p["class_id"], rules, matnr, data.get("fallback"))
     warnings.extend(feature_warnings)
 
     series = pim_reader.get_pim_raw_code(product, "ZZSER")
@@ -355,6 +355,7 @@ def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: st
             pim = sources.get_products(pg, chunk, pim_fields)
             assets = sources.get_dam_assets(pg, chunk)
             eprel = sources.get_eprel_links(pg, chunk)
+            fallback = sources.get_fallback_values(pg, chunk)
             mara = sources.get_mara_packaging(hana, chunk) if hana else {}
             origin = sources.get_marc_origin(hana, chunk, werks) if hana and werks else {}
             history = []
@@ -373,6 +374,7 @@ def export_batch(matnrs: list[str], lang_codes: list[str], kunnr: str, vkorg: st
                                     else f"{matnr}: kein Preis in Datenquelle {preise.upper()} gefunden.")
                 data = {"hana": hana, "werks": werks, "mara": mara.get(matnr), "origin": origin.get(matnr),
                         "assets": assets.get(matnr, {}), "eprel": eprel.get(matnr, {}),
+                        "fallback": fallback.get(matnr),
                         "price_row": price_rows.get(matnr), "datasheet_ok": datasheet_ok.get(matnr),
                         "image_names": image_names}
                 products.append(_build_product(matnr, product, languages, rules, data, warnings))
@@ -503,6 +505,7 @@ def get_changed_articles() -> list[dict]:
             return []
         rules = RuleSet.load(conn)
         products = sources.get_products(conn, [c[0] for c in candidates], rules.pim_fields())
+        fallback = sources.get_fallback_values(conn, [c[0] for c in candidates])
     finally:
         conn.close()
 
@@ -512,7 +515,7 @@ def get_changed_articles() -> list[dict]:
         if not product:
             continue
         class_id = rules.class_by_zztyp.get(pim_reader.get_zztypen_code(product) or "")
-        features = compute_features(product, class_id, rules, matnr)[0] if class_id else []
+        features = compute_features(product, class_id, rules, matnr, fallback.get(matnr))[0] if class_id else []
         current = {"class_id": class_id, "features": {f["feature_id"]: f["values"] for f in features}}
         changes = diff_features(snapshot, current, rules)
         if changes:

@@ -97,6 +97,29 @@ def get_eprel_links(conn: psycopg.Connection, matnrs: list[str]) -> dict[str, di
                 for m, svg, ds in cur.fetchall()}
 
 
+def get_fallback_values(conn: psycopg.Connection, matnrs: list[str]) -> dict[str, dict[str, dict]]:
+    """{matnr: {feature_id: {value, value2, source}}} from etim10_fallback_values
+    (EPREL / packaging values, used where the PIM rule gives nothing). Empty if
+    the table doesn't exist yet."""
+    out: dict[str, dict[str, dict]] = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT matnr, feature_id, value, value2, source
+                FROM public.etim10_fallback_values
+                WHERE matnr = ANY(%s) AND active
+                """,
+                (matnrs,),
+            )
+            for matnr, feature_id, value, value2, source in cur.fetchall():
+                out.setdefault(matnr, {})[feature_id] = {"value": value, "value2": value2, "source": source}
+    except psycopg.errors.UndefinedTable:
+        conn.rollback()
+        logger.warning("etim10_fallback_values existiert noch nicht - keine Ersatzwerte.")
+    return out
+
+
 def get_prices(conn: psycopg.Connection, matnrs: list[str], vkorg: str, vtweg: str, spart: str,
                kunnr: str, datasource: str) -> dict[str, dict]:
     """Prices from c_PriceData per matnr (datasource 'CSV' or 'SAP')."""
