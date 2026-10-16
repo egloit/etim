@@ -10,6 +10,10 @@ Lobster semantics reproduced here (checked against produkte_etim10_features):
   - a field's fixed value always wins over its mapping/functions
   - goto/break chains (#105/#223) are code -> value switches; the trailing
     #223 is the default (also applied when the PIM field is empty)
+  - deliberate deviation: after a case the chain continues with the next
+    compare (c+1), not the profile's 'else' goto d. In correct chains both are
+    the same; in a few the goto skips a compare, which made all later cases
+    unreachable in Lobster (see sql/fix_lobster_dead_switch_branches.sql)
   - #159 looks up the key in a map loaded by #230 in the init node; a map
     name that was never loaded makes the lookup return nothing -> the rule
     is imported inactive
@@ -28,6 +32,13 @@ LOG_IDS = {"-593251360", "-822267925", "130", "-1640537962", "-270239329"}
 CSV_HEADER_KEYS = {"Column1", "data", "Wert"}
 # Copied 1:1 into unrelated features as placeholders in the profile.
 MULTISELECT_PLACEHOLDERS = {"PIM_dimmable_with"}
+# Switch results that are not one value in the profile, cleaned per the PIM
+# option label: (pim code, slot) -> value.
+SWITCH_VALUE_FIXES = {
+    ("PIM_FAS_09_1_2799", "value"): "2700", ("PIM_FAS_09_1_2799", "value2"): "6000",   # 2700 / 3000 / 4000 / 6000
+    ("PIM_FAS_09_1_3450", "value2"): "5000",                                            # 3000 / 4000 / 5000
+    ("PIM_FAS_09_1_3466", "value"): "3000", ("PIM_FAS_09_1_3466", "value2"): "6000",   # 3000 / 4500 / 6000
+}
 
 
 def _pim_field(ref: str) -> str:
@@ -92,7 +103,8 @@ class Importer:
     def _switch(fns: list[dict]) -> tuple[list[dict], dict[str, str], str | None, dict | None]:
         """Resolve a goto/break chain. Falling through to the empty-value
         macro yields its 'g' argument (the macro returns g): a constant
-        becomes the default, a field reference a raw-copy fallback."""
+        becomes the default, a field reference a raw-copy fallback. After a
+        case the next compare is c+1 (see module docstring)."""
         pos = {i + 1: fn for i, fn in enumerate(fns)}
         cases, default, fallback, srcargs, i, guard = {}, None, None, [], 1, 0
         while i in pos and guard < 1000:
@@ -102,10 +114,13 @@ class Importer:
                 a, b = fn["args"]["a"], fn["args"]["b"]
                 const, src = (a, b) if a["type"] == "constant" else (b, a)
                 srcargs.append(src)
-                hit = pos.get(int(fn["args"]["c"]["value"] or 0))
+                c = int(fn["args"]["c"]["value"] or 0)
+                hit = pos.get(c)
                 if hit and hit["id"] == "223":
                     cases.setdefault(const["value"], hit["args"]["a"]["value"])
-                i = int(fn["args"]["d"]["value"] or 0)
+                    i = c + 1
+                else:
+                    i = int(fn["args"]["d"]["value"] or 0)
             elif fn["id"] == "223":
                 default = fn["args"]["a"]["value"]
                 break
@@ -120,7 +135,7 @@ class Importer:
                 i += 1
         return srcargs, cases, default, fallback
 
-    def _parse_value(self, field: dict, feature: str, select_fields: dict[str, str]) -> list[dict]:
+    def _parse_value(self, field: dict, feature: str, select_fields: dict[str, str], slot: str = "value") -> list[dict]:
         """Rules for one value/value2 field, in evaluation order (a crosswalk
         can be followed by a raw-copy fallback)."""
         fns = field["functions"]
@@ -143,6 +158,7 @@ class Importer:
             srcargs, cases, default, fallback = self._switch(fns)
             pim = next((self._src(a, select_fields) for a in srcargs if self._src(a, select_fields)), None)
             pim = pim or (src_pim[0] if src_pim else None)
+            cases = {k: SWITCH_VALUE_FIXES.get((k, slot), v) for k, v in cases.items()}
             if default is not None:
                 cases["*"] = default
             name = self._add_set(f"{pim}_{feature}", cases)
@@ -293,7 +309,7 @@ class Importer:
                 for slot in ("value", "value2"):
                     if slot not in fields:
                         continue
-                    for rule in self._parse_value(fields[slot], feature, select_fields):
+                    for rule in self._parse_value(fields[slot], feature, select_fields, slot):
                         self._add_rule(rule, class_id, feature, slot, unit, required, node["name"], label)
 
     def _add_rule(self, rule, class_id, feature, slot, unit, required, node_name, label):
