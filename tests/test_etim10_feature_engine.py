@@ -138,3 +138,41 @@ def test_diff_features_reports_added_changed_removed(rules):
         ("changed", "EF012154", "false", "true"),
     ]
     assert diff_features(old, old, rules) == []
+
+
+def test_fallback_fills_empty_feature_and_replaces_configured_value(rules):
+    rules.allowed_values[(CLASS, "EF008157")] = {"EV000154", "EV011539"}
+    rules.model_features[(CLASS, "EF009346")] = {"type": "R", "unit": "EU570076"}
+    fallback = {
+        "EF000015": {"value": "80", "value2": None, "source": "webcenter"},          # PIM empty
+        "EF008157": {"value": "EV011539", "value2": None, "source": "eprel"},        # beats fix 'Other'
+        "EF009346": {"value": "2700", "value2": "6500", "source": "eprel"},          # no rule at all
+        "EF999999": {"value": "1", "value2": None, "source": "eprel"},               # not in class
+    }
+
+    features, warnings = compute_features(_product(), CLASS, rules, "1", fallback)
+
+    by_id = {f["feature_id"]: f["values"] for f in features}
+    assert by_id["EF000015"] == ["80"]
+    assert by_id["EF008157"] == ["EV011539"]
+    assert by_id["EF009346"] == ["2700", "6500"]
+    assert "EF999999" not in by_id and not any("EF999999" in w for w in warnings)
+
+
+def test_fallback_does_not_override_pim_value(rules):
+    fallback = {"EF000187": {"value": "EV000999", "value2": None, "source": "eprel"}}
+
+    raw = compute_raw(_product(ZZNETZS="ZZNETZS_01"), CLASS, rules, fallback)
+
+    assert raw["EF000187"]["value"] == "EV000460"
+
+
+def test_fallback_keeps_crosswalk_default_reached_by_real_pim_code(rules):
+    fallback = {"EF012154": {"value": "true", "value2": None, "source": "eprel"},
+                "EF000136": {"value": "EV000202", "value2": None, "source": "webcenter"}}
+
+    # PIM code without own crosswalk entry -> default 'false' / 'EV000154' via '*'
+    raw = compute_raw(_product(PIM_dimmable_with=["PIM_dimmable_with_Wandschalter"]), CLASS, rules, fallback)
+    assert raw["EF012154"]["value"] == "false"
+    # PIM field empty -> default replaced by the fallback
+    assert raw["EF000136"]["value"] == "EV000202"

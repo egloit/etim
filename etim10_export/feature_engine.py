@@ -166,37 +166,55 @@ def _evaluate(rule: dict, product: dict, crosswalk: dict[str, dict[str, str]]) -
     return table.get("*", ""), True
 
 
-def compute_raw(product: dict, class_id: str, rules: RuleSet) -> dict[str, dict[str, str]]:
+def compute_raw(product: dict, class_id: str, rules: RuleSet,
+                fallback: Optional[dict[str, dict]] = None) -> dict[str, dict[str, str]]:
     """Rule output before the model check: {feature_id: {'value': .., 'value2': ..,
     'value_from_config': bool}}. Several rules for the same feature/slot: first
-    non-empty one (by sort_order) wins."""
+    non-empty one (by sort_order) wins.
+
+    *fallback* ({feature_id: {value, value2, source}}, see
+    sources.get_fallback_values) fills a feature whose rules give nothing, or
+    give a fix value / crosswalk default while the rule's PIM field is empty -
+    that says nothing about the article, an EPREL or packaging value does. A
+    crosswalk default reached by a real PIM code (e.g. ZZDIMMR_J -> '*' true)
+    is kept."""
     result: dict[str, dict] = defaultdict(dict)
     for rule in rules.rules_by_class.get(class_id, []):
         slot = result[rule["feature_id"]]
         if slot.get(rule["slot"], "") not in EMPTY_VALUES:
             continue
         slot[rule["slot"]], slot[f"{rule['slot']}_from_config"] = _evaluate(rule, product, rules.crosswalk)
+        if rule["slot"] == "value":
+            slot["pim_empty"] = rule["source_type"] == "fix" or not _raw_values(product, rule["pim_field"])
+    for feature_id, fb in (fallback or {}).items():
+        slot = result[feature_id]
+        if slot.get("value", "") in EMPTY_VALUES or (slot.get("value_from_config") and slot.get("pim_empty")):
+            slot.update(value=fb["value"], value2=fb.get("value2") or "", value_from_config=False,
+                        value2_from_config=False, source=fb.get("source"))
     return dict(result)
 
 
-def compute_features(product: dict, class_id: str, rules: RuleSet, matnr: str = "") -> tuple[list[dict], list[str]]:
+def compute_features(product: dict, class_id: str, rules: RuleSet, matnr: str = "",
+                     fallback: Optional[dict[str, dict]] = None) -> tuple[list[dict], list[str]]:
     """Validated features for the BMEcat file, sorted by feature id:
     [{'feature_id', 'values': [v] or [min, max], 'unit_id'}], plus warnings for
     PIM values dropped because ETIM 10 doesn't allow them. Invalid values that
     come from the rule configuration (fix value / crosswalk default, e.g.
     'sonstige' where the class doesn't allow it) are dropped silently - they say
-    nothing about the article and would repeat for every article of the class."""
+    nothing about the article and would repeat for every article of the class.
+    Fallback values (see compute_raw) for features the class doesn't have are
+    dropped silently too - the loader stores them per article, not per class."""
     features, warnings = [], []
-    for feature_id, slots in sorted(compute_raw(product, class_id, rules).items()):
+    for feature_id, slots in sorted(compute_raw(product, class_id, rules, fallback).items()):
         value = (slots.get("value") or "").strip()
         value2 = (slots.get("value2") or "").strip()
         if value in EMPTY_VALUES:
             continue
         from_config = slots.get("value_from_config", False)
         model = rules.model_features.get((class_id, feature_id))
-        prefix = f"{matnr}: {feature_id}"
+        prefix = f"{matnr}: {feature_id}" + (f" (Ersatzwert {slots['source']})" if slots.get("source") else "")
         if model is None:
-            if not from_config:
+            if not from_config and not slots.get("source"):
                 warnings.append(f"{prefix} gehört in ETIM 10 nicht zur Klasse {class_id} – ausgelassen.")
             continue
         ftype = model["type"]
