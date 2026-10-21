@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -33,6 +34,7 @@ from etim10_export.pipeline import list_export_files as etim10_list_export_files
 from etim10_export.pipeline import save_export_file as etim10_save_export_file
 from issue_report import collect_issues, to_xlsx
 from json_builder import build_json
+from mailer import build_export_mail, mail_enabled, send_mail
 from parser import parse_file
 from sender import send_payload
 from validator import validate_form_data, validate_rows
@@ -630,14 +632,28 @@ async def submit_endpoint(
             "ETIM10 EXPORT | file=%s | articles=%d | warnings=%d | validation_errors=%d",
             file.filename, len(matnrs), len(all_warnings), len(validation_errors),
         )
-        # HTTP headers have a size limit - long warning lists are cut off here.
-        if len(all_warnings) > _MAX_HEADER_WARNINGS:
-            rest = len(all_warnings) - _MAX_HEADER_WARNINGS
-            all_warnings = all_warnings[:_MAX_HEADER_WARNINGS] + [f"... und {rest} weitere Warnungen"]
 
         filename = f"etim10_{kunnr.strip().zfill(10)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml"
         issues = collect_issues(warning_details + [w.message for w in warnings], validation_errors)
         etim10_save_export_file(filename, exported_by, matnrs, xml_bytes, issues)
+
+        # A failed mail doesn't abort the export - the file is still downloaded.
+        if mail_enabled():
+            try:
+                msg = build_export_mail(
+                    email.strip(), filename, xml_bytes, len(matnrs), all_warnings, len(validation_errors),
+                    to_xlsx(issues, filename) if issues else None,
+                )
+                await run_in_threadpool(send_mail, msg)
+                logger.info("ETIM10 MAIL | to=%s | file=%s", email.strip(), filename)
+            except Exception as exc:
+                logger.error("ETIM10 MAIL ERROR | %s", exc)
+                all_warnings.append(str(exc))
+
+        # HTTP headers have a size limit - long warning lists are cut off here.
+        if len(all_warnings) > _MAX_HEADER_WARNINGS:
+            rest = len(all_warnings) - _MAX_HEADER_WARNINGS
+            all_warnings = all_warnings[:_MAX_HEADER_WARNINGS] + [f"... und {rest} weitere Warnungen"]
         return Response(
             content=xml_bytes,
             media_type="application/xml",
