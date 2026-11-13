@@ -137,6 +137,56 @@
   </div>
   {% endif %}
 
+  <!-- ================================================================
+       Data quality check (technical service) - independent of the export form
+  ================================================================ -->
+  <div id="qcPanel" class="card section-card mb-4">
+    <div class="card-header d-flex align-items-center justify-content-between" role="button"
+         data-bs-toggle="collapse" data-bs-target="#qcBody">
+      <span><i class="bi bi-clipboard-check me-2"></i>Data quality check (ETIM / GS1)</span>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="qcBody" class="collapse">
+      <div class="card-body">
+        <form id="qcForm" novalidate autocomplete="off">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label for="qcMatnrs" class="form-label fw-semibold">Material numbers <span class="text-danger">*</span></label>
+              <textarea class="form-control" id="qcMatnrs" name="matnrs" rows="2"
+                        placeholder="e.g. 32048, 89534, 902202"></textarea>
+              <div class="field-hint">Separated by comma (max. 20). One or two articles per ETIM class / GS1 Brick give a good overview.</div>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Check</label>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="systems" value="etim" id="qcEtim" checked/>
+                <label class="form-check-label" for="qcEtim">ETIM</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="systems" value="gs1" id="qcGs1" checked/>
+                <label class="form-check-label" for="qcGs1">GS1</label>
+              </div>
+            </div>
+            <div class="col-md-3" id="qcMarketCol">
+              <label for="qcVkorg" class="form-label fw-semibold">GS1 target market</label>
+              <select class="form-select" id="qcVkorg" name="vkorg">
+                {% for vkorg, market in target_markets.items() %}
+                <option value="{{ vkorg }}">{{ market.name }} ({{ vkorg }})</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="d-flex align-items-center gap-3 mt-3">
+            <button type="submit" id="qcBtn" class="btn btn-primary px-4">
+              <i class="bi bi-file-earmark-excel me-1"></i>Create Excel
+            </button>
+            <span id="qcStatus" class="small"></span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <form id="mainForm" novalidate autocomplete="off">
 
     <!-- ================================================================
@@ -1229,6 +1279,56 @@ async function loadEtimFiles() {
   }
 }
 loadEtimFiles();
+
+/* =========================================================
+   Data quality check – Excel download
+   ========================================================= */
+(function () {
+  const form = document.getElementById('qcForm');
+  const btn = document.getElementById('qcBtn');
+  const status = document.getElementById('qcStatus');
+  const gs1 = document.getElementById('qcGs1');
+  const toggleMarket = () => document.getElementById('qcMarketCol').classList.toggle('d-none', !gs1.checked);
+  gs1.addEventListener('change', toggleMarket);
+  toggleMarket();
+
+  const setStatus = (text, cls) => { status.className = 'small ' + (cls || ''); status.textContent = text; };
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const matnrs = document.getElementById('qcMatnrs').value.split(/[,;\s]+/).filter(Boolean);
+    if (!matnrs.length) { setStatus('Please enter at least one material number.', 'text-danger'); return; }
+    if (matnrs.length > 20) { setStatus('At most 20 material numbers per check.', 'text-danger'); return; }
+    if (!form.querySelector('input[name="systems"]:checked')) { setStatus('Please select ETIM and/or GS1.', 'text-danger'); return; }
+
+    btn.disabled = true;
+    setStatus('Checking ' + matnrs.length + ' article(s) – this can take a moment …', 'text-muted');
+    try {
+      const resp = await fetch('/quality-check', { method: 'POST', body: new FormData(form) });
+      if (!resp.ok) {
+        let msg = 'Check failed (HTTP ' + resp.status + ').';
+        try { msg = (await resp.json()).message || msg; } catch (_) {}
+        setStatus(msg, 'text-danger');
+        return;
+      }
+      const blob = await resp.blob();
+      const disposition = resp.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = match ? match[1] : 'data_quality_check.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      setStatus('Excel created.', 'text-success');
+    } catch (err) {
+      setStatus('Check failed: ' + err, 'text-danger');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
 </script>
 </body>
 </html>

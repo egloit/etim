@@ -36,6 +36,8 @@ from issue_report import collect_issues, to_xlsx
 from json_builder import build_json
 from mailer import build_export_mail, mail_enabled, send_mail
 from parser import parse_file
+from quality_report import TARGET_MARKETS, QualityCheckError, parse_matnrs
+from quality_report import build_report as build_quality_report
 from sender import send_payload
 from validator import validate_form_data, validate_rows
 
@@ -193,6 +195,7 @@ async def index(request: Request):
             "user": user,
             "roles": user.get("roles", []),
             "etim10_direct": ETIM10_DIRECT_EXPORT,
+            "target_markets": TARGET_MARKETS,
         }
     )
 
@@ -355,6 +358,34 @@ async def gs1_file_issues(request: Request, file_id: int):
     if file is None:
         return JSONResponse({"success": False, "errors": [{"field": "Fehlerliste", "message": "Datei nicht gefunden.", "row": None}]}, status_code=404)
     return _issues_response(file)
+
+
+@app.post("/quality-check")
+async def quality_check(
+    request: Request,
+    matnrs: Annotated[str, Form()] = "",
+    systems: Annotated[Optional[List[str]], Form()] = None,
+    vkorg: Annotated[str, Form()] = "",
+):
+    """Data quality check for the technical service: Excel with all ETIM
+    features of the class / GS1 attributes of the Brick per article, with the
+    value the export would write and its PIM source. Read-only, nothing is
+    sent or recorded."""
+    user = request.session.get("user", {})
+    matnr_list = parse_matnrs(matnrs)
+    selected = [s for s in (systems or []) if s in ("etim", "gs1")]
+    logger.info("QUALITY CHECK | user=%s systems=%s vkorg=%s matnrs=%s",
+                user.get("email"), selected, vkorg, matnr_list)
+    try:
+        content = await run_in_threadpool(build_quality_report, matnr_list, selected, vkorg.strip())
+    except QualityCheckError as exc:
+        return JSONResponse({"success": False, "message": str(exc)}, status_code=400)
+    except Exception as exc:  # unexpected - log with traceback, short message to the user
+        logger.exception("QUALITY CHECK ERROR")
+        return JSONResponse({"success": False, "message": f"Check failed: {exc}"}, status_code=500)
+    name = f"data_quality_check_{datetime.now():%Y%m%d_%H%M}.xlsx"
+    return Response(content=content, media_type=_XLSX,
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.post("/validate")

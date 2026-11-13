@@ -17,8 +17,9 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 
@@ -332,19 +333,161 @@ def _manual_number(conn, matnr: str, pickid: str) -> Optional[int]:
         return None
 
 
-def _resolve_crosswalk_value(conn, pickid: str, pim_codes: list[str]) -> Optional[str]:
+def _resolve_crosswalk(conn, pickid: str, pim_codes: list[str]) -> tuple[Optional[str], bool]:
     """Check every candidate raw PIM code for an exact gs1_pim_value_crosswalk
     match (multiselect fields can have several selected codes - a match
     anywhere wins over the wildcard, regardless of position), falling back to
     the wildcard once none of them matched. Used for both propertyCode and
     select-sourced propertyMeasurement Picks (e.g. 4.769/ZZNETZS, where the
     raw select code - not a plain number - has to be translated to a fixed
-    voltage via the crosswalk)."""
+    voltage via the crosswalk). Returns (value, from_wildcard)."""
     for pim_code in pim_codes:
         value = gs1_mapping.get_pim_value_crosswalk_exact(conn, pickid, pim_code)
         if value:
-            return value
-    return gs1_mapping.get_pim_value_crosswalk_wildcard(conn, pickid)
+            return value, False
+    value = gs1_mapping.get_pim_value_crosswalk_wildcard(conn, pickid)
+    return value, bool(value)
+
+
+def _resolve_crosswalk_value(conn, pickid: str, pim_codes: list[str]) -> Optional[str]:
+    return _resolve_crosswalk(conn, pickid, pim_codes)[0]
+
+
+# PickValue.source values
+SOURCE_PIM = "PIM"
+SOURCE_CROSSWALK = "crosswalk"
+SOURCE_CROSSWALK_DEFAULT = "crosswalk default (*)"
+SOURCE_MANUAL = "gs1_manual_property_values"
+SOURCE_RULE = "rule"
+
+
+@dataclass
+class PickValue:
+    """Value of one Brick attribute (Pick) for one article, as the export
+    writes it - shared by export_batch() and the data quality report.
+
+    value: int (propertyMeasurement/propertyInteger/lightBulbDiameterValue/
+    visibleLight), str (propertyCode/propertyString), bool
+    (areBatteriesIncluded), {gs1 language code: text} (propertyDescription);
+    None/empty = nothing to export. skip_reason is set when the Pick is
+    skipped regardless of the article's data (unsupported GDSN type, no unit)."""
+    gdsn_type: Optional[str]
+    value: Any = None
+    source: str = ""
+    unit_code: Optional[str] = None
+    pim_codes: list[str] = field(default_factory=list)
+    skip_reason: str = ""
+
+
+def resolve_pick(conn, matnr: str, product: dict, brick_id: str, pickid: str, pimfeld: str,
+                 languages: list[tuple[str, dict]]) -> PickValue:
+    """Value of one mapped Pick (gs1_mapping row) for one article - the rules
+    of the GS1 export, see the comments in export_batch()."""
+    # gs1_gpc_attribute_types tells us which GDSN element a Pick actually
+    # needs: "propertyDescription" (free, language-dependent text),
+    # "propertyCode" (via gs1_pim_value_crosswalk), "propertyMeasurement"
+    # (via measurement_unit_code) and "propertyInteger" (plain number,
+    # no unit) are all built.
+    gdsn_type = gs1_mapping.get_gdsn_attribute_type(conn, brick_id, pickid)
+    pv = PickValue(gdsn_type)
+
+    def take(value, source: str) -> bool:
+        if value is None or value == "":
+            return False
+        pv.value, pv.source = value, source
+        return True
+
+    if gdsn_type == "propertyMeasurement":
+        pv.unit_code = gs1_mapping.get_measurement_unit_code(conn, brick_id, pickid)
+        if not pv.unit_code:
+            pv.skip_reason = "no measurementUnitCode in gs1_gpc_attribute_types"
+            return pv
+        # Some sources are select fields whose raw code needs translating to a
+        # fixed number via the crosswalk (e.g. 4.769/ZZNETZS: "ZZNETZS_02" ->
+        # "230"), others are plain numeric/text PIM fields (e.g.
+        # 4.052/PIM_FAS_05_1: "10"). Try the crosswalk first, fall back to
+        # direct parsing.
+        pv.pim_codes = pim_reader.get_pim_raw_codes(product, pimfeld)
+        if pv.pim_codes:
+            crosswalk_value, from_wildcard = _resolve_crosswalk(conn, pickid, pv.pim_codes)
+            if crosswalk_value:
+                try:
+                    take(pim_reader.round_half_up(crosswalk_value),
+                         SOURCE_CROSSWALK_DEFAULT if from_wildcard else SOURCE_CROSSWALK)
+                except (ValueError, ArithmeticError):
+                    pass
+        if pv.value is None:
+            if pickid in _SUM_ALL_NUMBERS_PICKS:
+                take(pim_reader.get_pim_number_sum_as_int(product, pimfeld), SOURCE_PIM)
+            else:
+                take(pim_reader.get_pim_number_as_int(product, pimfeld), SOURCE_PIM)
+        if pv.value is None:
+            # Stopgap while the PIM field is empty: value from
+            # gs1_manual_property_values (e.g. source 'webcenter' = read from
+            # the packaging layouts).
+            take(_manual_number(conn, matnr, pickid), SOURCE_MANUAL)
+        return pv
+
+    if gdsn_type == "propertyCode":
+        # Multiselect fields can have several selected codes (e.g.
+        # B2C_Filter_Function); a crosswalk rule can be "true if ANY of these
+        # codes is selected", so every code needs an exact-match check before
+        # falling back to the wildcard once. An entirely unset PIM field
+        # (pim_codes == []) still goes through the crosswalk - it falls
+        # straight through to the wildcard, same as "no exact match" - so a
+        # Pick with a wildcard default (e.g. 4.290: "* -> FALSE") gets that
+        # default even when the source field was never filled in.
+        pv.pim_codes = pim_reader.get_pim_raw_codes(product, pimfeld)
+        if pickid in _FSC_SUBSTRING_PICKS:
+            take("TRUE" if any("FSC" in c.upper() for c in pv.pim_codes) else "FALSE",
+                 f"{SOURCE_RULE} (code contains FSC)")
+        else:
+            code_value, from_wildcard = _resolve_crosswalk(conn, pickid, pv.pim_codes)
+            take(code_value, SOURCE_CROSSWALK_DEFAULT if from_wildcard else SOURCE_CROSSWALK)
+        if not pv.value and pickid in _CODE_FALLBACKS:
+            fallback_field, codes = _CODE_FALLBACKS[pickid]
+            take(next((codes[c] for c in pim_reader.get_pim_raw_codes(product, fallback_field) if c in codes), None),
+                 f"{SOURCE_RULE} (fallback {fallback_field})")
+        return pv
+
+    if gdsn_type == "propertyString":
+        # GS1-documented "NOT IN PIM" attributes (Recupel/Bebat/Stibat/Wecycle
+        # recycling codes) - no PIM source field to translate, looked up
+        # directly by matnr instead.
+        take(gs1_mapping.get_manual_property_value(conn, matnr, pickid), SOURCE_MANUAL)
+        return pv
+
+    if gdsn_type == "propertyInteger":
+        take(pim_reader.get_pim_number_as_int(product, pimfeld), SOURCE_PIM)
+        return pv
+
+    if gdsn_type in ("lightBulbDiameterValue", "visibleLight"):
+        # visibleLight = 8.353 nominal useful luminous flux; PIM first, then
+        # the stopgap table (source 'eprel' / 'webcenter')
+        if not take(pim_reader.get_pim_number_as_int(product, pimfeld), SOURCE_PIM):
+            take(_manual_number(conn, matnr, pickid), SOURCE_MANUAL)
+        return pv
+
+    if gdsn_type == "areBatteriesIncluded":
+        pv.pim_codes = pim_reader.get_pim_raw_codes(product, pimfeld)
+        if not take(_batteries_included(pv.pim_codes), SOURCE_PIM) and \
+                gs1_mapping.get_manual_property_value(conn, matnr, _BEBAT_PICK):
+            # No J/N in the PIM, but a Bebat code = the article contains batteries.
+            take(True, f"{SOURCE_RULE} (Bebat code {_BEBAT_PICK} present)")
+        return pv
+
+    if gdsn_type is not None and gdsn_type != "propertyDescription":
+        pv.skip_reason = f"GDSN type '{gdsn_type}' not supported by the export"
+        return pv
+
+    value = pim_reader.get_pim_value(product, pimfeld)
+    texts_by_language: dict[str, str] = {}
+    for _lang_code, lang_cfg in languages:
+        text = next((t for loc in _pim_locales(lang_cfg) if (t := pim_reader.resolve_text(value, loc))), None)
+        if text:
+            texts_by_language[lang_cfg["gs1_code"]] = text
+    take(texts_by_language or None, SOURCE_PIM)
+    return pv
 
 
 def export_batch(
@@ -445,135 +588,71 @@ def export_batch(
             for mapping_row in mappings:
                 pickid = mapping_row["pickid"]
                 pimfeld = mapping_row["pimfeld"]
-
-                # gs1_gpc_attribute_types tells us which GDSN element a Pick actually
-                # needs: "propertyDescription" (free, language-dependent text),
-                # "propertyCode" (via gs1_pim_value_crosswalk), "propertyMeasurement"
-                # (via measurement_unit_code) and "propertyInteger" (plain number,
-                # no unit) are all built.
-                gdsn_type = gs1_mapping.get_gdsn_attribute_type(conn, brick_id, pickid)
+                pv = resolve_pick(conn, matnr, product, brick_id, pickid, pimfeld, languages)
+                gdsn_type = pv.gdsn_type
 
                 if gdsn_type == "propertyMeasurement":
-                    unit_code = gs1_mapping.get_measurement_unit_code(conn, brick_id, pickid)
-                    if not unit_code:
+                    if not pv.unit_code:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s: kein measurementUnitCode in "
                             "gs1_gpc_attribute_types, Property wird ausgelassen",
                             matnr, pickid,
                         )
                         continue
-
-                    # Some sources are select fields whose raw code needs
-                    # translating to a fixed number via the crosswalk (e.g.
-                    # 4.769/ZZNETZS: "ZZNETZS_02" -> "230"), others are plain
-                    # numeric/text PIM fields (e.g. 4.052/PIM_FAS_05_1: "10").
-                    # Try the crosswalk first, fall back to direct parsing.
-                    amount = None
-                    pim_codes = pim_reader.get_pim_raw_codes(product, pimfeld)
-                    if pim_codes:
-                        crosswalk_value = _resolve_crosswalk_value(conn, pickid, pim_codes)
-                        if crosswalk_value:
-                            try:
-                                amount = pim_reader.round_half_up(crosswalk_value)
-                            except (ValueError, ArithmeticError):
-                                amount = None
-                    if amount is None:
-                        if pickid in _SUM_ALL_NUMBERS_PICKS:
-                            amount = pim_reader.get_pim_number_sum_as_int(product, pimfeld)
-                        else:
-                            amount = pim_reader.get_pim_number_as_int(product, pimfeld)
-                    if amount is None:
-                        # Stopgap while the PIM field is empty: value from
-                        # gs1_manual_property_values (e.g. source 'webcenter' =
-                        # read from the packaging layouts).
-                        amount = _manual_number(conn, matnr, pickid)
-
-                    if amount is None:
+                    if pv.value is None:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s: kein Zahlwert (weder Crosswalk "
                             "noch direkte Zahl noch gs1_manual_property_values), Property wird ausgelassen",
                             matnr, pickid, pimfeld,
                         )
                         continue
-                    properties.append(gs1_exporter.build_measurement_property_element(pickid, amount, unit_code))
+                    properties.append(gs1_exporter.build_measurement_property_element(pickid, pv.value, pv.unit_code))
                     continue
 
                 if gdsn_type == "propertyCode":
-                    # Multiselect fields can have several selected codes (e.g.
-                    # B2C_Filter_Function); a crosswalk rule can be "true if ANY
-                    # of these codes is selected", so every code needs an exact-
-                    # match check before falling back to the wildcard once.
-                    # An entirely unset PIM field (pim_codes == []) still goes
-                    # through _resolve_crosswalk_value() - it falls straight
-                    # through to the wildcard, same as "no exact match" - so a
-                    # Pick with a wildcard default (e.g. 4.290: "* -> FALSE")
-                    # gets that default even when the source field was never
-                    # filled in, instead of being silently skipped.
-                    pim_codes = pim_reader.get_pim_raw_codes(product, pimfeld)
-                    if pickid in _FSC_SUBSTRING_PICKS:
-                        code_value = "TRUE" if any("FSC" in c.upper() for c in pim_codes) else "FALSE"
-                    else:
-                        code_value = _resolve_crosswalk_value(conn, pickid, pim_codes)
-                    if not code_value and pickid in _CODE_FALLBACKS:
-                        field, codes = _CODE_FALLBACKS[pickid]
-                        code_value = next((codes[c] for c in pim_reader.get_pim_raw_codes(product, field) if c in codes), None)
-                    if not code_value:
+                    if not pv.value:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s pim_codes=%s: kein "
                             "Crosswalk-Eintrag (auch keine Wildcard) in gs1_pim_value_crosswalk, "
                             "Property wird ausgelassen",
-                            matnr, pickid, pimfeld, pim_codes,
+                            matnr, pickid, pimfeld, pv.pim_codes,
                         )
                         continue
-                    properties.append(gs1_exporter.build_code_property_element(pickid, code_value))
+                    properties.append(gs1_exporter.build_code_property_element(pickid, pv.value))
                     continue
 
                 if gdsn_type == "propertyString":
-                    # GS1-documented "NOT IN PIM" attributes (Recupel/Bebat/
-                    # Stibat/Wecycle recycling codes) - no PIM source field to
-                    # translate, looked up directly by matnr instead.
-                    value = gs1_mapping.get_manual_property_value(conn, matnr, pickid)
-                    if not value:
+                    if not pv.value:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s: kein Eintrag in "
                             "gs1_manual_property_values, Property wird ausgelassen",
                             matnr, pickid,
                         )
                         continue
-                    properties.append(gs1_exporter.build_string_property_element(pickid, value))
+                    properties.append(gs1_exporter.build_string_property_element(pickid, pv.value))
                     continue
 
                 if gdsn_type == "propertyInteger":
-                    amount = pim_reader.get_pim_number_as_int(product, pimfeld)
-                    if amount is None:
+                    if pv.value is None:
                         logger.info(
                             "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s: kein Zahlwert, "
                             "Property wird ausgelassen",
                             matnr, pickid, pimfeld,
                         )
                         continue
-                    properties.append(gs1_exporter.build_integer_property_element(pickid, amount))
+                    properties.append(gs1_exporter.build_integer_property_element(pickid, pv.value))
                     continue
 
                 if gdsn_type == "lightBulbDiameterValue":
-                    bulb_diameter = pim_reader.get_pim_number_as_int(product, pimfeld)
-                    if bulb_diameter is None:
-                        bulb_diameter = _manual_number(conn, matnr, pickid)
+                    bulb_diameter = pv.value
                     continue
 
                 if gdsn_type == "visibleLight":
-                    # 8.353 nominal useful luminous flux; PIM first, then the
-                    # stopgap table (source 'eprel' / 'webcenter')
-                    visible_light = pim_reader.get_pim_number_as_int(product, pimfeld)
-                    if visible_light is None:
-                        visible_light = _manual_number(conn, matnr, pickid)
+                    visible_light = pv.value
                     continue
 
                 if gdsn_type == "areBatteriesIncluded":
-                    batteries_included = _batteries_included(pim_reader.get_pim_raw_codes(product, pimfeld))
-                    if batteries_included is None and gs1_mapping.get_manual_property_value(conn, matnr, _BEBAT_PICK):
-                        # No J/N in the PIM, but a Bebat code = the article contains batteries.
-                        batteries_included = True
+                    batteries_included = pv.value
                     continue
 
                 if gdsn_type is not None and gdsn_type != "propertyDescription":
@@ -591,22 +670,14 @@ def export_batch(
                         matnr, pickid,
                     )
 
-                value = pim_reader.get_pim_value(product, pimfeld)
-
-                texts_by_language: dict[str, str] = {}
-                for lang_code, lang_cfg in languages:
-                    text = next((t for loc in _pim_locales(lang_cfg) if (t := pim_reader.resolve_text(value, loc))), None)
-                    if text:
-                        texts_by_language[lang_cfg["gs1_code"]] = text
-
-                if not texts_by_language:
+                if not pv.value:
                     logger.warning(
                         "GS1 EXPORT | matnr=%s pickid=%s pimfeld=%s: kein Wert gefunden, Property wird ausgelassen",
                         matnr, pickid, pimfeld,
                     )
                     continue
 
-                properties.append(gs1_exporter.build_description_property_element(pickid, texts_by_language))
+                properties.append(gs1_exporter.build_description_property_element(pickid, pv.value))
 
             gtin_value = pim_reader.get_pim_value(product, "EAN11")
             gtin = _gtin_from_ean((gtin_value.get("translations") or {}).get(None, "") if gtin_value else "")
