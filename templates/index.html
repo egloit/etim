@@ -92,7 +92,7 @@
 
   <div id="gs1FilesPanel" class="card section-card mb-4 d-none">
     <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#gs1FilesBody">
-      <span><i class="bi bi-clock-history me-2"></i>Meine bisherigen GS1-Exporte <span id="gs1FilesCount" class="badge bg-secondary ms-1"></span></span>
+      <span><i class="bi bi-clock-history me-2"></i>{{ "Alle GS1-Exporte" if is_admin else "Meine bisherigen GS1-Exporte" }} <span id="gs1FilesCount" class="badge bg-secondary ms-1"></span></span>
       <i class="bi bi-chevron-down"></i>
     </div>
     <div id="gs1FilesBody" class="collapse">
@@ -100,7 +100,7 @@
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
             <thead class="table-light">
-              <tr><th>Datum</th><th>Artikel</th><th>Datei</th><th></th></tr>
+              <tr><th>Datum</th>{% if is_admin %}<th>Erstellt von</th>{% endif %}<th>Artikel</th><th>Datei</th><th></th></tr>
             </thead>
             <tbody id="gs1FilesTableBody"></tbody>
           </table>
@@ -126,7 +126,7 @@
 
   <div id="etimFilesPanel" class="card section-card mb-4 d-none">
     <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#etimFilesBody">
-      <span><i class="bi bi-clock-history me-2"></i>Meine bisherigen ETIM10-Exporte <span id="etimFilesCount" class="badge bg-secondary ms-1"></span></span>
+      <span><i class="bi bi-clock-history me-2"></i>{{ "Alle ETIM10-Exporte" if is_admin else "Meine bisherigen ETIM10-Exporte" }} <span id="etimFilesCount" class="badge bg-secondary ms-1"></span></span>
       <i class="bi bi-chevron-down"></i>
     </div>
     <div id="etimFilesBody" class="collapse">
@@ -134,7 +134,7 @@
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
             <thead class="table-light">
-              <tr><th>Datum</th><th>Artikel</th><th>Datei</th><th></th></tr>
+              <tr><th>Datum</th>{% if is_admin %}<th>Erstellt von</th>{% endif %}<th>Artikel</th><th>Datei</th><th></th></tr>
             </thead>
             <tbody id="etimFilesTableBody"></tbody>
           </table>
@@ -490,6 +490,8 @@
    State
    ========================================================= */
 let validationPassed = false;
+const IS_ADMIN = {{ "true" if is_admin else "false" }}; // sieht Exporte aller User
+const exporterName = e => (e || "–").split("@")[0];
 
 /* =========================================================
    Mode (etim / gs1) – Sprachen ein-/ausblenden
@@ -1190,7 +1192,7 @@ async function loadGs1Files() {
       const matnrPreview = (f.matnrs || []).slice(0, 3).map(escHtml).join(', ')
         + ((f.matnrs || []).length > 3 ? ', …' : '');
       return `<tr>
-        <td class="text-nowrap">${date}</td>
+        <td class="text-nowrap">${date}</td>${IS_ADMIN ? `<td class="text-nowrap">${escHtml(exporterName(f.exported_by))}</td>` : ''}
         <td>${f.article_count} <span class="text-muted small">(${matnrPreview})</span></td>
         <td><code>${escHtml(f.filename)}</code></td>
         <td class="text-end">
@@ -1264,7 +1266,7 @@ async function loadEtimFiles() {
       const matnrPreview = (f.matnrs || []).slice(0, 3).map(escHtml).join(', ')
         + ((f.matnrs || []).length > 3 ? ', …' : '');
       return `<tr>
-        <td class="text-nowrap">${date}</td>
+        <td class="text-nowrap">${date}</td>${IS_ADMIN ? `<td class="text-nowrap">${escHtml(exporterName(f.exported_by))}</td>` : ''}
         <td>${f.article_count} <span class="text-muted small">(${matnrPreview})</span></td>
         <td><code>${escHtml(f.filename)}</code></td>
         <td class="text-end">
