@@ -161,7 +161,7 @@ def test_save_export_file_tolerates_missing_table():
 def test_list_export_files_maps_rows():
     now = datetime(2026, 8, 28, 9, 0, 0)
     cursor = _RecordingCursor(fetchall_result=[
-        (7, "gs1_export_20260828.xml", now, 2, ["43706", "89534"], 3),
+        (7, "gs1_export_20260828.xml", now, 2, ["43706", "89534"], 3, "user@eglo.com"),
     ])
     conn = _RecordingConnection(cursor)
     result = database.list_export_files(conn, "user@eglo.com")
@@ -172,8 +172,26 @@ def test_list_export_files_maps_rows():
         "article_count": 2,
         "matnrs": ["43706", "89534"],
         "issue_count": 3,
+        "exported_by": "user@eglo.com",
     }]
     assert cursor.calls[0][1] == ("user@eglo.com",)
+    assert "WHERE lower(exported_by) = lower(%s)" in cursor.calls[0][0]
+
+
+def test_list_export_files_all_users_without_owner_filter():
+    cursor = _RecordingCursor(fetchall_result=[])
+    conn = _RecordingConnection(cursor)
+    assert database.list_export_files(conn, None) == []
+    query, params = cursor.calls[0]
+    assert "WHERE" not in query and params == ()
+
+
+def test_get_export_file_any_owner_for_admin_scope():
+    cursor = _RecordingCursor(fetchone_result=("x.xml", b"<xml/>", None))
+    conn = _RecordingConnection(cursor)
+    assert database.get_export_file(conn, 7, None)["filename"] == "x.xml"
+    query, params = cursor.calls[0]
+    assert "exported_by" not in query and params == (7,)
 
 
 def test_list_export_files_returns_empty_list_when_table_missing():

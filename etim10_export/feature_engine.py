@@ -184,6 +184,7 @@ def compute_raw(product: dict, class_id: str, rules: RuleSet,
         if slot.get(rule["slot"], "") not in EMPTY_VALUES:
             continue
         slot[rule["slot"]], slot[f"{rule['slot']}_from_config"] = _evaluate(rule, product, rules.crosswalk)
+        slot[f"{rule['slot']}_rule"] = rule  # winning (or last tried) rule - for the quality report
         if rule["slot"] == "value":
             slot["pim_empty"] = rule["source_type"] == "fix" or not _raw_values(product, rule["pim_field"])
     for feature_id, fb in (fallback or {}).items():

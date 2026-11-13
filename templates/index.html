@@ -27,6 +27,9 @@
     #jsonPreviewSection pre { font-size: .76rem; line-height: 1.45; }
     .json-toolbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
     .spinner-overlay { display: none; }
+    /* "Geänderte Artikel"-Karten: Warnfarbe statt Brand-Türkis */
+    .section-card.changed-card .card-header { color: #997404; border-bottom-color: #ffc107; }
+    #gs1ChangedList, #etimChangedList { max-height: 420px; overflow-y: auto; }
     /* Brand colour overrides */
     .bg-primary, .btn-primary { background-color: #1ca1a9 !important; border-color: #1ca1a9 !important; }
     .btn-outline-primary { color: #1ca1a9 !important; border-color: #1ca1a9 !important; }
@@ -74,20 +77,22 @@
 <div class="container-xl py-4">
 
   {% if 'gs1' in roles %}
-  <div id="gs1ChangedPanel" class="alert alert-warning d-none mb-4">
-    <div class="d-flex align-items-start gap-2">
-      <i class="bi bi-exclamation-triangle-fill fs-5 mt-1"></i>
-      <div class="flex-grow-1">
-        <strong id="gs1ChangedTitle"></strong>
-        <div id="gs1ChangedList" class="small mt-1"></div>
-        <div class="text-muted small mt-1">Artikelnummern oben in einer neuen Datei hochladen, um die GS1-XML für diese Artikel neu zu erzeugen.</div>
+  <div id="gs1ChangedPanel" class="card section-card changed-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#gs1ChangedBody">
+      <span><i class="bi bi-exclamation-triangle-fill me-2"></i><span id="gs1ChangedTitle">Im PIM geänderte Artikel seit dem letzten GS1-Export</span> <span id="gs1ChangedCount" class="badge bg-warning text-dark ms-1"></span></span>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="gs1ChangedBody" class="collapse">
+      <div class="card-body">
+        <div id="gs1ChangedList" class="small"></div>
+        <div class="text-muted small mt-2">Artikelnummern oben in einer neuen Datei hochladen, um die GS1-XML für diese Artikel neu zu erzeugen.</div>
       </div>
     </div>
   </div>
 
   <div id="gs1FilesPanel" class="card section-card mb-4 d-none">
     <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#gs1FilesBody">
-      <span><i class="bi bi-clock-history me-2"></i>Meine bisherigen GS1-Exporte <span id="gs1FilesCount" class="badge bg-secondary ms-1"></span></span>
+      <span><i class="bi bi-clock-history me-2"></i>{{ "Alle GS1-Exporte" if is_admin else "Meine bisherigen GS1-Exporte" }} <span id="gs1FilesCount" class="badge bg-secondary ms-1"></span></span>
       <i class="bi bi-chevron-down"></i>
     </div>
     <div id="gs1FilesBody" class="collapse">
@@ -95,7 +100,7 @@
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
             <thead class="table-light">
-              <tr><th>Datum</th><th>Artikel</th><th>Datei</th><th></th></tr>
+              <tr><th>Datum</th>{% if is_admin %}<th>Erstellt von</th>{% endif %}<th>Artikel</th><th>Datei</th><th></th></tr>
             </thead>
             <tbody id="gs1FilesTableBody"></tbody>
           </table>
@@ -106,20 +111,22 @@
   {% endif %}
 
   {% if 'etim' in roles %}
-  <div id="etimChangedPanel" class="alert alert-warning d-none mb-4">
-    <div class="d-flex align-items-start gap-2">
-      <i class="bi bi-exclamation-triangle-fill fs-5 mt-1"></i>
-      <div class="flex-grow-1">
-        <strong id="etimChangedTitle"></strong>
-        <div id="etimChangedList" class="small mt-2"></div>
-        <div class="text-muted small mt-1">Artikelnummern in einer neuen Datei hochladen, um die ETIM10-Datei für diese Artikel neu zu erzeugen.</div>
+  <div id="etimChangedPanel" class="card section-card changed-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#etimChangedBody">
+      <span><i class="bi bi-exclamation-triangle-fill me-2"></i><span id="etimChangedTitle">Geänderte ETIM-Merkmale seit dem letzten ETIM10-Export</span> <span id="etimChangedCount" class="badge bg-warning text-dark ms-1"></span></span>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="etimChangedBody" class="collapse">
+      <div class="card-body">
+        <div id="etimChangedList" class="small"></div>
+        <div class="text-muted small mt-2">Artikelnummern in einer neuen Datei hochladen, um die ETIM10-Datei für diese Artikel neu zu erzeugen.</div>
       </div>
     </div>
   </div>
 
   <div id="etimFilesPanel" class="card section-card mb-4 d-none">
     <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#etimFilesBody">
-      <span><i class="bi bi-clock-history me-2"></i>Meine bisherigen ETIM10-Exporte <span id="etimFilesCount" class="badge bg-secondary ms-1"></span></span>
+      <span><i class="bi bi-clock-history me-2"></i>{{ "Alle ETIM10-Exporte" if is_admin else "Meine bisherigen ETIM10-Exporte" }} <span id="etimFilesCount" class="badge bg-secondary ms-1"></span></span>
       <i class="bi bi-chevron-down"></i>
     </div>
     <div id="etimFilesBody" class="collapse">
@@ -127,7 +134,7 @@
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
             <thead class="table-light">
-              <tr><th>Datum</th><th>Artikel</th><th>Datei</th><th></th></tr>
+              <tr><th>Datum</th>{% if is_admin %}<th>Erstellt von</th>{% endif %}<th>Artikel</th><th>Datei</th><th></th></tr>
             </thead>
             <tbody id="etimFilesTableBody"></tbody>
           </table>
@@ -136,6 +143,56 @@
     </div>
   </div>
   {% endif %}
+
+  <!-- ================================================================
+       Data quality check (technical service) - independent of the export form
+  ================================================================ -->
+  <div id="qcPanel" class="card section-card mb-4">
+    <div class="card-header d-flex align-items-center justify-content-between" role="button"
+         data-bs-toggle="collapse" data-bs-target="#qcBody">
+      <span><i class="bi bi-clipboard-check me-2"></i>Data quality check (ETIM / GS1)</span>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="qcBody" class="collapse">
+      <div class="card-body">
+        <form id="qcForm" novalidate autocomplete="off">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label for="qcMatnrs" class="form-label fw-semibold">Material numbers <span class="text-danger">*</span></label>
+              <textarea class="form-control" id="qcMatnrs" name="matnrs" rows="2"
+                        placeholder="e.g. 32048, 89534, 902202"></textarea>
+              <div class="field-hint">Separated by comma (max. 20). One or two articles per ETIM class / GS1 Brick give a good overview.</div>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-semibold">Check</label>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="systems" value="etim" id="qcEtim" checked/>
+                <label class="form-check-label" for="qcEtim">ETIM</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="systems" value="gs1" id="qcGs1" checked/>
+                <label class="form-check-label" for="qcGs1">GS1</label>
+              </div>
+            </div>
+            <div class="col-md-3" id="qcMarketCol">
+              <label for="qcVkorg" class="form-label fw-semibold">GS1 target market</label>
+              <select class="form-select" id="qcVkorg" name="vkorg">
+                {% for vkorg, market in target_markets.items() %}
+                <option value="{{ vkorg }}">{{ market.name }} ({{ vkorg }})</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="d-flex align-items-center gap-3 mt-3">
+            <button type="submit" id="qcBtn" class="btn btn-primary px-4">
+              <i class="bi bi-file-earmark-excel me-1"></i>Create Excel
+            </button>
+            <span id="qcStatus" class="small"></span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
 
   <form id="mainForm" novalidate autocomplete="off">
 
@@ -433,6 +490,8 @@
    State
    ========================================================= */
 let validationPassed = false;
+const IS_ADMIN = {{ "true" if is_admin else "false" }}; // sieht Exporte aller User
+const exporterName = e => (e || "–").split("@")[0];
 
 /* =========================================================
    Mode (etim / gs1) – Sprachen ein-/ausblenden
@@ -1072,8 +1131,7 @@ async function loadGs1ChangedArticles() {
     const articles = data.articles || [];
     if (articles.length === 0) return;
 
-    document.getElementById('gs1ChangedTitle').textContent =
-      `${articles.length} Artikel wurden im PIM geändert seit dem letzten GS1-Export:`;
+    document.getElementById('gs1ChangedCount').textContent = articles.length;
     // Details (welche Werte sich geändert haben) werden erst beim Aufklappen
     // geladen – der Artikel wird dafür neu aufgebaut (~1 s pro Artikel).
     document.getElementById('gs1ChangedList').innerHTML = articles.map(a => `
@@ -1134,7 +1192,7 @@ async function loadGs1Files() {
       const matnrPreview = (f.matnrs || []).slice(0, 3).map(escHtml).join(', ')
         + ((f.matnrs || []).length > 3 ? ', …' : '');
       return `<tr>
-        <td class="text-nowrap">${date}</td>
+        <td class="text-nowrap">${date}</td>${IS_ADMIN ? `<td class="text-nowrap">${escHtml(exporterName(f.exported_by))}</td>` : ''}
         <td>${f.article_count} <span class="text-muted small">(${matnrPreview})</span></td>
         <td><code>${escHtml(f.filename)}</code></td>
         <td class="text-end">
@@ -1176,8 +1234,7 @@ async function loadEtimChangedArticles() {
     const articles = (await resp.json()).articles || [];
     if (articles.length === 0) return;
 
-    document.getElementById('etimChangedTitle').textContent =
-      `${articles.length} Artikel haben seit dem letzten ETIM10-Export geänderte Merkmale:`;
+    document.getElementById('etimChangedCount').textContent = articles.length;
     document.getElementById('etimChangedList').innerHTML = articles.map(a => `
       <details class="mb-1">
         <summary><code>${escHtml(a.matnr)}</code> – ${a.changes.length} Änderung(en)
@@ -1209,7 +1266,7 @@ async function loadEtimFiles() {
       const matnrPreview = (f.matnrs || []).slice(0, 3).map(escHtml).join(', ')
         + ((f.matnrs || []).length > 3 ? ', …' : '');
       return `<tr>
-        <td class="text-nowrap">${date}</td>
+        <td class="text-nowrap">${date}</td>${IS_ADMIN ? `<td class="text-nowrap">${escHtml(exporterName(f.exported_by))}</td>` : ''}
         <td>${f.article_count} <span class="text-muted small">(${matnrPreview})</span></td>
         <td><code>${escHtml(f.filename)}</code></td>
         <td class="text-end">
@@ -1229,6 +1286,56 @@ async function loadEtimFiles() {
   }
 }
 loadEtimFiles();
+
+/* =========================================================
+   Data quality check – Excel download
+   ========================================================= */
+(function () {
+  const form = document.getElementById('qcForm');
+  const btn = document.getElementById('qcBtn');
+  const status = document.getElementById('qcStatus');
+  const gs1 = document.getElementById('qcGs1');
+  const toggleMarket = () => document.getElementById('qcMarketCol').classList.toggle('d-none', !gs1.checked);
+  gs1.addEventListener('change', toggleMarket);
+  toggleMarket();
+
+  const setStatus = (text, cls) => { status.className = 'small ' + (cls || ''); status.textContent = text; };
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const matnrs = document.getElementById('qcMatnrs').value.split(/[,;\s]+/).filter(Boolean);
+    if (!matnrs.length) { setStatus('Please enter at least one material number.', 'text-danger'); return; }
+    if (matnrs.length > 20) { setStatus('At most 20 material numbers per check.', 'text-danger'); return; }
+    if (!form.querySelector('input[name="systems"]:checked')) { setStatus('Please select ETIM and/or GS1.', 'text-danger'); return; }
+
+    btn.disabled = true;
+    setStatus('Checking ' + matnrs.length + ' article(s) – this can take a moment …', 'text-muted');
+    try {
+      const resp = await fetch('/quality-check', { method: 'POST', body: new FormData(form) });
+      if (!resp.ok) {
+        let msg = 'Check failed (HTTP ' + resp.status + ').';
+        try { msg = (await resp.json()).message || msg; } catch (_) {}
+        setStatus(msg, 'text-danger');
+        return;
+      }
+      const blob = await resp.blob();
+      const disposition = resp.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = match ? match[1] : 'data_quality_check.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      setStatus('Excel created.', 'text-success');
+    } catch (err) {
+      setStatus('Check failed: ' + err, 'text-danger');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
 </script>
 </body>
 </html>
