@@ -317,6 +317,33 @@ def test_marketing_text_falls_back_to_nl_be(monkeypatch, product):
     assert b"Deze hanglamp ..." in xml_bytes
 
 
+def test_marketing_text_read_from_product_json_nl_be(monkeypatch, product):
+    """The textarea helper table has no nl_BE rows at all (GS1 510.029 for
+    31235) - the text must come from the product JSON."""
+    product = dict(product); product["values"] = dict(product["values"])
+    product["values"]["PIM_ARTIKELTEXT"] = [
+        {"locale": "fr_BE", "data": "Cette suspension ...", "attribute_type": "pim_catalog_textarea"},
+        {"locale": "nl_BE", "data": "Deze Nogalte hanglamp ...", "attribute_type": "pim_catalog_textarea"},
+    ]
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(database, "get_active_mappings", lambda conn, brick_id: [{"pickid": "4.651", "pimfeld": "(manual)"}])
+    monkeypatch.setattr(database, "get_gdsn_attribute_type", lambda conn, brick_id, pick_id: "propertyString")
+    monkeypatch.setattr(database, "get_manual_property_value", lambda conn, matnr, pick_id: None)
+
+    xml_bytes, _, _ = pipeline.export_batch(["62053"], ["nl", "fr", "eng"])
+
+    root = etree.fromstring(xml_bytes)
+    messages = {m.get("languageCode"): m.text for m in root.iter("tradeItemMarketingMessage")}
+    assert messages == {"nl": "Deze Nogalte hanglamp ...", "fr": "Cette suspension ..."}
+
+
+def test_pim_text_by_locale_keeps_single_locale():
+    product = {"values": {"PIM_ARTIKELTEXT": [{"locale": "fr_BE", "data": " Texte ", "attribute_type": "x"}]}}
+    assert pipeline._pim_text_by_locale(product, "PIM_ARTIKELTEXT") == {"fr_BE": "Texte"}
+
+
 def test_dimmable_type_falls_back_to_not_dimmable(monkeypatch, product):
     """8.492 empty in PIM_dimmable_with, but ZZDIMMR = N -> 'niet_dimbaar'."""
     product = dict(product); product["values"] = dict(product["values"])

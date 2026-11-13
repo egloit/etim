@@ -275,6 +275,15 @@ def _pim_locales(lang_cfg: dict) -> list[str]:
     return [lang_cfg["pim_locale"], *lang_cfg.get("pim_fallback", [])]
 
 
+def _pim_text_by_locale(product: dict, field: str) -> dict[str, str]:
+    """{locale: text} of a localisable PIM field straight from the product
+    JSON - also correct when only one locale is filled (get_pim_value() would
+    return that single text as locale-independent)."""
+    entries = pim_reader._find_entries(product, field) or []
+    return {e["locale"]: e["data"].strip() for e in entries
+            if e.get("locale") and isinstance(e.get("data"), str) and e["data"].strip()}
+
+
 def _pim_descriptions(product: dict, language_config: dict) -> dict[str, str]:
     """{gs1 languageCode: MAKTX} from the PIM, only where it is a real
     translation - non-German texts identical to MAKTX de_DE are skipped, as
@@ -762,11 +771,19 @@ def export_batch(
             # gs1_exporter.build_marketing_information_module_element's
             # docstring. Uses the same PIM-locale convention as
             # propertyDescription (language_mapping.json), not SAP's spras.
+            # Read from the product JSON first: the helper table
+            # pim_egloakeneo_product_values_pim_catalog_textarea has no nl_BE
+            # rows at all, so Dutch texts maintained only in nl_BE were lost
+            # (GS1 error 510.029 for 31235, 2026-11-13). The table stays as
+            # fallback.
+            artikeltext = _pim_text_by_locale(product, "PIM_ARTIKELTEXT")
             marketing_texts_by_language: dict[str, str] = {}
             for lang_code, lang_cfg in languages:
                 # e.g. nl_NL missing but nl_BE filled -> nl_BE (pim_fallback in language_mapping.json)
-                text = next((t for loc in _pim_locales(lang_cfg)
-                             if (t := gs1_mapping.get_pim_catalog_textarea_value(conn, matnr, "PIM_ARTIKELTEXT", loc))), None)
+                locales = _pim_locales(lang_cfg)
+                text = next((artikeltext[loc] for loc in locales if loc in artikeltext), None) or \
+                    next((t for loc in locales
+                          if (t := gs1_mapping.get_pim_catalog_textarea_value(conn, matnr, "PIM_ARTIKELTEXT", loc))), None)
                 if text:
                     marketing_texts_by_language[lang_cfg["gs1_code"]] = text
             if marketing_texts_by_language:
