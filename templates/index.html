@@ -27,6 +27,9 @@
     #jsonPreviewSection pre { font-size: .76rem; line-height: 1.45; }
     .json-toolbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
     .spinner-overlay { display: none; }
+    /* "Geänderte Artikel"-Karten: Warnfarbe statt Brand-Türkis */
+    .section-card.changed-card .card-header { color: #997404; border-bottom-color: #ffc107; }
+    #gs1ChangedList, #etimChangedList { max-height: 420px; overflow-y: auto; }
     /* Brand colour overrides */
     .bg-primary, .btn-primary { background-color: #1ca1a9 !important; border-color: #1ca1a9 !important; }
     .btn-outline-primary { color: #1ca1a9 !important; border-color: #1ca1a9 !important; }
@@ -74,13 +77,15 @@
 <div class="container-xl py-4">
 
   {% if 'gs1' in roles %}
-  <div id="gs1ChangedPanel" class="alert alert-warning d-none mb-4">
-    <div class="d-flex align-items-start gap-2">
-      <i class="bi bi-exclamation-triangle-fill fs-5 mt-1"></i>
-      <div class="flex-grow-1">
-        <strong id="gs1ChangedTitle"></strong>
-        <div id="gs1ChangedList" class="small mt-1"></div>
-        <div class="text-muted small mt-1">Artikelnummern oben in einer neuen Datei hochladen, um die GS1-XML für diese Artikel neu zu erzeugen.</div>
+  <div id="gs1ChangedPanel" class="card section-card changed-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#gs1ChangedBody">
+      <span><i class="bi bi-exclamation-triangle-fill me-2"></i><span id="gs1ChangedTitle">Im PIM geänderte Artikel seit dem letzten GS1-Export</span> <span id="gs1ChangedCount" class="badge bg-warning text-dark ms-1"></span></span>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="gs1ChangedBody" class="collapse">
+      <div class="card-body">
+        <div id="gs1ChangedList" class="small"></div>
+        <div class="text-muted small mt-2">Artikelnummern oben in einer neuen Datei hochladen, um die GS1-XML für diese Artikel neu zu erzeugen.</div>
       </div>
     </div>
   </div>
@@ -106,13 +111,15 @@
   {% endif %}
 
   {% if 'etim' in roles %}
-  <div id="etimChangedPanel" class="alert alert-warning d-none mb-4">
-    <div class="d-flex align-items-start gap-2">
-      <i class="bi bi-exclamation-triangle-fill fs-5 mt-1"></i>
-      <div class="flex-grow-1">
-        <strong id="etimChangedTitle"></strong>
-        <div id="etimChangedList" class="small mt-2"></div>
-        <div class="text-muted small mt-1">Artikelnummern in einer neuen Datei hochladen, um die ETIM10-Datei für diese Artikel neu zu erzeugen.</div>
+  <div id="etimChangedPanel" class="card section-card changed-card mb-4 d-none">
+    <div class="card-header d-flex align-items-center justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#etimChangedBody">
+      <span><i class="bi bi-exclamation-triangle-fill me-2"></i><span id="etimChangedTitle">Geänderte ETIM-Merkmale seit dem letzten ETIM10-Export</span> <span id="etimChangedCount" class="badge bg-warning text-dark ms-1"></span></span>
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <div id="etimChangedBody" class="collapse">
+      <div class="card-body">
+        <div id="etimChangedList" class="small"></div>
+        <div class="text-muted small mt-2">Artikelnummern in einer neuen Datei hochladen, um die ETIM10-Datei für diese Artikel neu zu erzeugen.</div>
       </div>
     </div>
   </div>
@@ -1122,8 +1129,7 @@ async function loadGs1ChangedArticles() {
     const articles = data.articles || [];
     if (articles.length === 0) return;
 
-    document.getElementById('gs1ChangedTitle').textContent =
-      `${articles.length} Artikel wurden im PIM geändert seit dem letzten GS1-Export:`;
+    document.getElementById('gs1ChangedCount').textContent = articles.length;
     // Details (welche Werte sich geändert haben) werden erst beim Aufklappen
     // geladen – der Artikel wird dafür neu aufgebaut (~1 s pro Artikel).
     document.getElementById('gs1ChangedList').innerHTML = articles.map(a => `
@@ -1226,8 +1232,7 @@ async function loadEtimChangedArticles() {
     const articles = (await resp.json()).articles || [];
     if (articles.length === 0) return;
 
-    document.getElementById('etimChangedTitle').textContent =
-      `${articles.length} Artikel haben seit dem letzten ETIM10-Export geänderte Merkmale:`;
+    document.getElementById('etimChangedCount').textContent = articles.length;
     document.getElementById('etimChangedList').innerHTML = articles.map(a => `
       <details class="mb-1">
         <summary><code>${escHtml(a.matnr)}</code> – ${a.changes.length} Änderung(en)
