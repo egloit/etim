@@ -462,6 +462,7 @@ def build_trade_item_element(
     extension_modules: list[etree._Element] | None = None,
     contact_name: str = "",
     contact_email: str = "",
+    eprel_registration_number: str = "",
 ) -> etree._Element:
     trade_item = etree.Element("tradeItem")
 
@@ -471,6 +472,14 @@ def build_trade_item_element(
         "additionalTradeItemIdentification",
         additionalTradeItemIdentificationTypeCode="SUPPLIER_ASSIGNED",
     ).text = matnr
+    # GS1 rule 520.024: an Energy Rating Code (Pick 4.242) needs the EPREL
+    # registration number as additional identification.
+    if eprel_registration_number:
+        etree.SubElement(
+            trade_item,
+            "additionalTradeItemIdentification",
+            additionalTradeItemIdentificationTypeCode="EPREL",
+        ).text = eprel_registration_number
     etree.SubElement(trade_item, "isTradeItemABaseUnit").text = "true"
     etree.SubElement(trade_item, "isTradeItemAConsumerUnit").text = "true"
     etree.SubElement(trade_item, "isTradeItemADespatchUnit").text = "true"
