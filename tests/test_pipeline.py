@@ -67,6 +67,59 @@ def _stub_option_labels(monkeypatch):
     monkeypatch.setattr(database, "get_attribute_option_labels", lambda conn, attribute, code: {})
 
 
+@pytest.fixture(autouse=True)
+def _stub_eprel(monkeypatch):
+    """No EPREL registration by default - see the EPREL tests below."""
+    monkeypatch.setattr(database, "get_eprel_registration_number", lambda conn, model: None)
+
+
+def _id_types(item) -> dict[str, str]:
+    return {e.get("additionalTradeItemIdentificationTypeCode"): e.text
+            for e in item.findall("additionalTradeItemIdentification")}
+
+
+def _stub_energy_rating_article(monkeypatch, product, rating: str):
+    monkeypatch.setattr(database, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(database, "get_product_by_matnr", lambda conn, matnr: product)
+    monkeypatch.setattr(database, "get_brick_id", lambda conn, code: "10000552")
+    monkeypatch.setattr(database, "get_active_mappings",
+                        lambda conn, brick_id: [{"pickid": "4.242", "pimfeld": "PIM_LM_40"}])
+    monkeypatch.setattr(pipeline, "resolve_pick",
+                        lambda *a, **k: pipeline.PickValue("propertyCode", value=rating))
+    monkeypatch.setattr(validator, "validate_xml", lambda xml_bytes: [])
+
+
+def test_export_batch_adds_eprel_identification_via_led_module(monkeypatch, product):
+    product = {**product, "values": {**product["values"], "PIM_LED_NR_1": [
+        {"data": "2835-L960-84-15W-3000K", "scope": None, "locale": None, "attribute_type": "pim_catalog_text"}]}}
+    _stub_energy_rating_article(monkeypatch, product, "e")
+    monkeypatch.setattr(database, "get_eprel_registration_number",
+                        lambda conn, model: "1111970" if model == "2835-L960-84-15W-3000K" else None)
+
+    xml_bytes, warnings, _ = pipeline.export_batch(["32048"], ["nl"])
+
+    item = _trade_items(xml_bytes)[0]
+    assert _id_types(item) == {"SUPPLIER_ASSIGNED": "32048", "EPREL": "1111970"}
+    assert not any("520.024" in w for w in warnings)
+
+
+def test_export_batch_warns_on_energy_rating_without_eprel(monkeypatch, product):
+    _stub_energy_rating_article(monkeypatch, product, "e")
+
+    xml_bytes, warnings, _ = pipeline.export_batch(["32048"], ["nl"])
+
+    assert _id_types(_trade_items(xml_bytes)[0]) == {"SUPPLIER_ASSIGNED": "32048"}
+    assert any("520.024" in w for w in warnings)
+
+
+def test_export_batch_no_eprel_warning_when_rating_not_needed(monkeypatch, product):
+    _stub_energy_rating_article(monkeypatch, product, "niet_meer_nodig")
+
+    _, warnings, _ = pipeline.export_batch(["31235"], ["nl"])
+
+    assert not any("520.024" in w for w in warnings)
+
+
 def _trade_items(xml_bytes):
     root = etree.fromstring(xml_bytes)
     return root.findall(f".//transaction/documentCommand/{{{NS_CIN}}}catalogueItemNotification/catalogueItem/tradeItem")

@@ -13,6 +13,10 @@ def get_brick_id(conn: psycopg.Connection, zztypen_code: str) -> Optional[str]:
     return database.get_brick_id(conn, zztypen_code)
 
 
+def get_eprel_registration_number(conn: psycopg.Connection, model: str) -> Optional[str]:
+    return database.get_eprel_registration_number(conn, model)
+
+
 def get_active_mappings(conn: psycopg.Connection, brick_id: str) -> list[dict]:
     return database.get_active_mappings(conn, brick_id)
 

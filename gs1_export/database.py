@@ -292,6 +292,31 @@ def get_primary_product_image(conn: psycopg.Connection, matnr: str) -> Optional[
         return None
 
 
+def get_eprel_registration_number(conn: psycopg.Connection, model: str) -> Optional[str]:
+    """PUBLISHED EPREL registration number for a model identifier from
+    public.eprel_view (our matnr for light sources, the LED module for
+    luminaires). Separators are compared normalised because eprel_view shows
+    some of them as '?' - same as load_eprel_values._key()."""
+    key = model.replace("?", "-").replace(" ", "").upper()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT "EPREL_RegistrationNumber"
+                FROM public.eprel_view
+                WHERE upper(replace(replace(matnr, '?', '-'), ' ', '')) = %s
+                  AND "EPREL_Status" = 'PUBLISHED' AND "EPREL_RegistrationNumber" IS NOT NULL
+                LIMIT 1
+                """,
+                (key,),
+            )
+            row = cur.fetchone()
+            return str(row[0]) if row else None
+    except psycopg.errors.UndefinedTable:
+        logger.warning("eprel_view existiert nicht - EPREL-Registriernummer nicht bestimmbar.")
+        return None
+
+
 def get_manual_property_value(conn: psycopg.Connection, matnr: str, pick_id: str) -> Optional[str]:
     """Look up a manually-maintained property value for a matnr+Pick from
     public.gs1_manual_property_values - used for GDSN attributes GS1 itself

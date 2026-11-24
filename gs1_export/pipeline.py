@@ -257,6 +257,26 @@ def _build_sap_extension_modules(
 
 _BEBAT_PICK = "4.651"
 _LIGHT_BEAM_PICK = "8.779"  # lightBeamTypeCode, only kept in gs1_manual_property_values (EPREL)
+_ENERGY_RATING_PICK = "4.242"  # Energy Rating Code
+_NO_ENERGY_RATING = "niet_meer_nodig"  # "Energy rating code no longer needed"
+_LED_MODULE_FIELDS = ("PIM_LED_NR_1", "PIM_LED_NR_2", "PIM_LED_NR_3")
+
+
+def _eprel_registration(conn, matnr: str, product: dict) -> Optional[str]:
+    """EPREL registration number for the additionalTradeItemIdentification
+    (GS1 rule 520.024). Light sources are registered under our matnr,
+    luminaires with integrated LED under their LED module - only taken if the
+    article has exactly one module, same as load_eprel_values."""
+    reg = gs1_mapping.get_eprel_registration_number(conn, matnr)
+    if reg:
+        return reg
+    modules = []
+    for field in _LED_MODULE_FIELDS:
+        value = pim_reader.get_pim_value(product, field)
+        text = ((value or {}).get("translations") or {}).get(None)
+        if text:
+            modules.append(text)
+    return gs1_mapping.get_eprel_registration_number(conn, modules[0]) if len(modules) == 1 else None
 
 
 def _batteries_included(codes: list[str]) -> Optional[bool]:
@@ -594,11 +614,14 @@ def export_batch(
             bulb_diameter: Optional[int] = None
             visible_light: Optional[int] = None
             batteries_included: Optional[bool] = None
+            energy_rating: Optional[str] = None
             for mapping_row in mappings:
                 pickid = mapping_row["pickid"]
                 pimfeld = mapping_row["pimfeld"]
                 pv = resolve_pick(conn, matnr, product, brick_id, pickid, pimfeld, languages)
                 gdsn_type = pv.gdsn_type
+                if pickid == _ENERGY_RATING_PICK and pv.value:
+                    energy_rating = pv.value
 
                 if gdsn_type == "propertyMeasurement":
                     if not pv.unit_code:
@@ -810,8 +833,19 @@ def export_batch(
                 gs1_exporter.build_packaging_information_module_element(_PACKAGING_TYPE_CODE, packaging_descriptions)
             )
 
+            # Sent whenever known, not only with an energy class: harmless
+            # extra identification, and unclear whether GS1 production counts
+            # 'niet_meer_nodig' as "filled" for 520.024.
+            eprel_reg = _eprel_registration(conn, matnr, product)
+            if energy_rating and energy_rating != _NO_ENERGY_RATING and not eprel_reg:
+                warnings.append(
+                    f"Artikel {matnr}: Energieklasse '{energy_rating}' (4.242), aber keine veröffentlichte "
+                    "EPREL-Registriernummer gefunden – GS1 lehnt das ab (Regel 520.024)."
+                )
+
             trade_item = gs1_exporter.build_trade_item_element(
                 matnr=matnr,
+                eprel_registration_number=eprel_reg or "",
                 gtin=gtin,
                 gpc_category_code=brick_id,
                 properties=properties,
