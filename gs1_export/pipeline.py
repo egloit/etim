@@ -262,21 +262,23 @@ _NO_ENERGY_RATING = "niet_meer_nodig"  # "Energy rating code no longer needed"
 _LED_MODULE_FIELDS = ("PIM_LED_NR_1", "PIM_LED_NR_2", "PIM_LED_NR_3")
 
 
-def _eprel_registration(conn, matnr: str, product: dict) -> Optional[str]:
-    """EPREL registration number for the additionalTradeItemIdentification
-    (GS1 rule 520.024). Light sources are registered under our matnr,
-    luminaires with integrated LED under their LED module - only taken if the
-    article has exactly one module, same as load_eprel_values."""
-    reg = gs1_mapping.get_eprel_registration_number(conn, matnr)
-    if reg:
-        return reg
-    modules = []
-    for field in _LED_MODULE_FIELDS:
-        value = pim_reader.get_pim_value(product, field)
-        text = ((value or {}).get("translations") or {}).get(None)
-        if text:
-            modules.append(text)
-    return gs1_mapping.get_eprel_registration_number(conn, modules[0]) if len(modules) == 1 else None
+def _eprel_registration(conn, matnr: str, product: dict) -> Optional[dict]:
+    """EPREL registration {"registration_number", "datasheet_url"} for the
+    additionalTradeItemIdentification (GS1 rule 520.024) and the
+    EPREL_PRODUCT_SHEET file that rule 520.025 then requires - None unless
+    both are known. Light sources are registered under our matnr, luminaires
+    with integrated LED under their LED module - only taken if the article has
+    exactly one module, same as load_eprel_values."""
+    reg = gs1_mapping.get_eprel_registration(conn, matnr)
+    if not reg:
+        modules = []
+        for field in _LED_MODULE_FIELDS:
+            value = pim_reader.get_pim_value(product, field)
+            text = ((value or {}).get("translations") or {}).get(None)
+            if text:
+                modules.append(text)
+        reg = gs1_mapping.get_eprel_registration(conn, modules[0]) if len(modules) == 1 else None
+    return reg if reg and reg.get("datasheet_url") else None
 
 
 def _batteries_included(codes: list[str]) -> Optional[bool]:
@@ -768,23 +770,39 @@ def export_batch(
             # database.get_primary_product_image's docstring. Other asset
             # types (DETAIL/DIMENSION/AMBIENT images, 360 video) deliberately
             # parked, user to clarify their referencedFileTypeCode later.
+            # EPREL: sent whenever known, not only with an energy class -
+            # harmless extra identification, and unclear whether GS1 production
+            # counts 'niet_meer_nodig' as "filled" for 520.024. Rule 520.025
+            # then needs the EPREL product information sheet as a file.
+            eprel = _eprel_registration(conn, matnr, product)
+            if energy_rating and energy_rating != _NO_ENERGY_RATING and not eprel:
+                warnings.append(
+                    f"Artikel {matnr}: Energieklasse '{energy_rating}' (4.242), aber keine veröffentlichte "
+                    "EPREL-Registrierung mit Datenblatt gefunden – GS1 lehnt das ab (Regeln 520.024/520.025)."
+                )
+
+            files = []
             image = gs1_mapping.get_primary_product_image(conn, matnr)
             if image:
-                extension_modules.append(
-                    gs1_exporter.build_referenced_file_detail_information_module_element(
-                        file_type_code="PRODUCT_IMAGE",
-                        file_format_name=_file_format_name(image["filename"]),
-                        file_name=image["filename"],
-                        uri=image["url"],
-                        is_primary_file=True,
-                        media_source_gln=GS1_SENDER_GLN,
-                    )
-                )
+                files.append({
+                    "file_type_code": "PRODUCT_IMAGE",
+                    "file_format_name": _file_format_name(image["filename"]),
+                    "file_name": image["filename"],
+                    "uri": image["url"],
+                    "is_primary_file": True,
+                })
             else:
-                logger.info(
-                    "GS1 EXPORT | matnr=%s: kein VIEW-Bild gefunden, "
-                    "referencedFileDetailInformationModule wird ausgelassen",
-                    matnr,
+                logger.info("GS1 EXPORT | matnr=%s: kein VIEW-Bild gefunden", matnr)
+            if eprel:
+                files.append({
+                    "file_type_code": "EPREL_PRODUCT_SHEET",
+                    "file_format_name": "PDF",
+                    "file_name": eprel["datasheet_url"].rsplit("/", 1)[-1],
+                    "uri": eprel["datasheet_url"],
+                })
+            if files:
+                extension_modules.append(
+                    gs1_exporter.build_referenced_files_module_element(files, media_source_gln=GS1_SENDER_GLN)
                 )
 
             # marketingInformationModule/tradeItemMarketingMessage - source
@@ -833,19 +851,9 @@ def export_batch(
                 gs1_exporter.build_packaging_information_module_element(_PACKAGING_TYPE_CODE, packaging_descriptions)
             )
 
-            # Sent whenever known, not only with an energy class: harmless
-            # extra identification, and unclear whether GS1 production counts
-            # 'niet_meer_nodig' as "filled" for 520.024.
-            eprel_reg = _eprel_registration(conn, matnr, product)
-            if energy_rating and energy_rating != _NO_ENERGY_RATING and not eprel_reg:
-                warnings.append(
-                    f"Artikel {matnr}: Energieklasse '{energy_rating}' (4.242), aber keine veröffentlichte "
-                    "EPREL-Registriernummer gefunden – GS1 lehnt das ab (Regel 520.024)."
-                )
-
             trade_item = gs1_exporter.build_trade_item_element(
                 matnr=matnr,
-                eprel_registration_number=eprel_reg or "",
+                eprel_registration_number=eprel["registration_number"] if eprel else "",
                 gtin=gtin,
                 gpc_category_code=brick_id,
                 properties=properties,

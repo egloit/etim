@@ -292,17 +292,18 @@ def get_primary_product_image(conn: psycopg.Connection, matnr: str) -> Optional[
         return None
 
 
-def get_eprel_registration_number(conn: psycopg.Connection, model: str) -> Optional[str]:
-    """PUBLISHED EPREL registration number for a model identifier from
+def get_eprel_registration(conn: psycopg.Connection, model: str) -> Optional[dict]:
+    """PUBLISHED EPREL registration for a model identifier from
     public.eprel_view (our matnr for light sources, the LED module for
-    luminaires). Separators are compared normalised because eprel_view shows
-    some of them as '?' - same as load_eprel_values._key()."""
+    luminaires): {"registration_number", "datasheet_url"} (product information
+    sheet, EN - may be None). Separators are compared normalised because
+    eprel_view shows some of them as '?' - same as load_eprel_values._key()."""
     key = model.replace("?", "-").replace(" ", "").upper()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT "EPREL_RegistrationNumber"
+                SELECT "EPREL_RegistrationNumber", "EPREL_Datasheet_EN_URL"
                 FROM public.eprel_view
                 WHERE upper(replace(replace(matnr, '?', '-'), ' ', '')) = %s
                   AND "EPREL_Status" = 'PUBLISHED' AND "EPREL_RegistrationNumber" IS NOT NULL
@@ -311,7 +312,7 @@ def get_eprel_registration_number(conn: psycopg.Connection, model: str) -> Optio
                 (key,),
             )
             row = cur.fetchone()
-            return str(row[0]) if row else None
+            return {"registration_number": str(row[0]), "datasheet_url": row[1]} if row else None
     except psycopg.errors.UndefinedTable:
         logger.warning("eprel_view existiert nicht - EPREL-Registriernummer nicht bestimmbar.")
         return None

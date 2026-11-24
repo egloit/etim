@@ -355,20 +355,34 @@ def build_referenced_file_detail_information_module_element(
     document and append each to extension_modules (the reference export only
     had one image, so multi-file ordering/isPrimaryFile-selection is
     unverified against a real multi-image example)."""
+    return build_referenced_files_module_element(
+        [{"file_type_code": file_type_code, "file_format_name": file_format_name, "file_name": file_name,
+          "uri": uri, "is_primary_file": is_primary_file}],
+        media_source_gln=media_source_gln,
+    )
+
+
+def build_referenced_files_module_element(files: list[dict], media_source_gln: str = "") -> etree._Element:
+    """referencedFileDetailInformationModule with one referencedFileHeader per
+    entry of *files* (keys as in build_referenced_file_detail_information_
+    module_element) - e.g. product image + EPREL_PRODUCT_SHEET (GS1 rule
+    520.025). GS1's error xPaths address referencedFileHeader[n] inside one
+    module, so several files go into one module, not one module each."""
     module = etree.Element(
         f"{{{NS_REFERENCED_FILE_DETAIL_INFORMATION}}}referencedFileDetailInformationModule",
         nsmap={"referenced_file_detail_information": NS_REFERENCED_FILE_DETAIL_INFORMATION, "xsi": NS_XSI},
     )
     module.set(f"{{{NS_XSI}}}schemaLocation", REFERENCED_FILE_DETAIL_INFORMATION_SCHEMA_LOCATION)
-    header = etree.SubElement(module, "referencedFileHeader")
-    etree.SubElement(header, "referencedFileTypeCode").text = file_type_code
-    etree.SubElement(header, "fileFormatName").text = file_format_name
-    etree.SubElement(header, "fileName").text = file_name
-    etree.SubElement(header, "uniformResourceIdentifier").text = uri
-    etree.SubElement(header, "isPrimaryFile").text = "TRUE" if is_primary_file else "FALSE"
-    if media_source_gln:
-        avp_list = etree.SubElement(header, "avpList")
-        etree.SubElement(avp_list, "stringAVP", attributeName="mediaSourceGln").text = media_source_gln
+    for f in files:
+        header = etree.SubElement(module, "referencedFileHeader")
+        etree.SubElement(header, "referencedFileTypeCode").text = f["file_type_code"]
+        etree.SubElement(header, "fileFormatName").text = f["file_format_name"]
+        etree.SubElement(header, "fileName").text = f["file_name"]
+        etree.SubElement(header, "uniformResourceIdentifier").text = f["uri"]
+        etree.SubElement(header, "isPrimaryFile").text = "TRUE" if f.get("is_primary_file") else "FALSE"
+        if media_source_gln:
+            avp_list = etree.SubElement(header, "avpList")
+            etree.SubElement(avp_list, "stringAVP", attributeName="mediaSourceGln").text = media_source_gln
     return module
 
 

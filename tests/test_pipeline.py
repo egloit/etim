@@ -70,7 +70,7 @@ def _stub_option_labels(monkeypatch):
 @pytest.fixture(autouse=True)
 def _stub_eprel(monkeypatch):
     """No EPREL registration by default - see the EPREL tests below."""
-    monkeypatch.setattr(database, "get_eprel_registration_number", lambda conn, model: None)
+    monkeypatch.setattr(database, "get_eprel_registration", lambda conn, model: None)
 
 
 def _id_types(item) -> dict[str, str]:
@@ -93,14 +93,38 @@ def test_export_batch_adds_eprel_identification_via_led_module(monkeypatch, prod
     product = {**product, "values": {**product["values"], "PIM_LED_NR_1": [
         {"data": "2835-L960-84-15W-3000K", "scope": None, "locale": None, "attribute_type": "pim_catalog_text"}]}}
     _stub_energy_rating_article(monkeypatch, product, "e")
-    monkeypatch.setattr(database, "get_eprel_registration_number",
-                        lambda conn, model: "1111970" if model == "2835-L960-84-15W-3000K" else None)
+    sheet = "https://eprel.ec.europa.eu/fiches/lightsources/Fiche_1111970_EN.pdf"
+    monkeypatch.setattr(database, "get_eprel_registration",
+                        lambda conn, model: {"registration_number": "1111970", "datasheet_url": sheet}
+                        if model == "2835-L960-84-15W-3000K" else None)
+    monkeypatch.setattr(database, "get_primary_product_image",
+                        lambda conn, matnr: {"url": "https://x/32048_101_0001.jpg", "filename": "32048_101_0001.jpg"})
 
     xml_bytes, warnings, _ = pipeline.export_batch(["32048"], ["nl"])
 
     item = _trade_items(xml_bytes)[0]
     assert _id_types(item) == {"SUPPLIER_ASSIGNED": "32048", "EPREL": "1111970"}
     assert not any("520.024" in w for w in warnings)
+    # 520.025: EPREL product sheet as second header in the same module
+    modules = item.findall("tradeItemInformation/extension/{urn:gs1:gdsn:referenced_file_detail_information:xsd:3}"
+                           "referencedFileDetailInformationModule")
+    assert len(modules) == 1
+    headers = modules[0].findall("referencedFileHeader")
+    assert [h.findtext("referencedFileTypeCode") for h in headers] == ["PRODUCT_IMAGE", "EPREL_PRODUCT_SHEET"]
+    assert headers[1].findtext("fileName") == "Fiche_1111970_EN.pdf"
+    assert headers[1].findtext("uniformResourceIdentifier") == sheet
+    assert headers[1].findtext("isPrimaryFile") == "FALSE"
+
+
+def test_export_batch_skips_eprel_without_datasheet(monkeypatch, product):
+    _stub_energy_rating_article(monkeypatch, product, "e")
+    monkeypatch.setattr(database, "get_eprel_registration",
+                        lambda conn, model: {"registration_number": "1111970", "datasheet_url": None})
+
+    xml_bytes, warnings, _ = pipeline.export_batch(["32048"], ["nl"])
+
+    assert _id_types(_trade_items(xml_bytes)[0]) == {"SUPPLIER_ASSIGNED": "32048"}
+    assert any("520.025" in w for w in warnings)
 
 
 def test_export_batch_warns_on_energy_rating_without_eprel(monkeypatch, product):
